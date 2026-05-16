@@ -43,7 +43,44 @@ from auto_assignment import (
     detect_three_phase_channel_sets,
     build_channel_set_summary_dataframe,
 )
+from conductor_impedance_importer import (
+    read_conductor_impedance_excel,
+    read_conductor_impedance_database,
+    detect_impedance_columns,
+    extract_impedance_from_row,
+    build_row_label,
+)
+from single_ended import (
+    calculate_single_ended_fault_location,
+    build_single_ended_result_dataframe,
+)
 
+
+def make_streamlit_safe_columns(df):
+    """
+    Membuat nama kolom DataFrame menjadi unik agar aman ditampilkan di Streamlit.
+    """
+
+    seen = {}
+    new_columns = []
+
+    for col in df.columns:
+        col = str(col).strip()
+
+        if col == "":
+            col = "Unnamed"
+
+        if col not in seen:
+            seen[col] = 1
+            new_columns.append(col)
+        else:
+            seen[col] += 1
+            new_columns.append(f"{col}_{seen[col]}")
+
+    safe_df = df.copy()
+    safe_df.columns = new_columns
+
+    return safe_df
 
 
 st.set_page_config(
@@ -92,7 +129,7 @@ except Exception as e:
 
 st.success("File COMTRADE berhasil dibaca.")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(
     [
         "1. Record Info",
         "2. Signal Assignment",
@@ -102,7 +139,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
         "6. Fault Type Detection",
         "7. Line Parameter",
         "8. High Resistance Detection",
-        "9. Two-Ended Fault Locator",
+        "9. Single-Ended Fault Locator",
+        "10. Two-Ended Fault Locator",
     ]
 )
 
@@ -1064,20 +1102,290 @@ with tab7:
             "Semua parameter akan dinormalisasi menjadi Z1_per_km, Z0_per_km, K0, Z1_total, dan Z0_total."
         )
 
+        st.markdown("### Sumber Data Parameter")
+
+        line_parameter_source = st.radio(
+            "Pilih sumber parameter saluran",
+            [
+                "Input Manual",
+                "Database Excel Line Data",
+            ],
+            horizontal=True,
+        )
+
+        excel_impedance_data = None
+
+        if line_parameter_source == "Database Excel Line Data":
+            st.markdown("### Database Excel Data Impedansi Saluran")
+
+            st.info(
+                "Aplikasi membaca data impedansi dari file lokal: "
+                "`database/line_data.xlsx`, sheet: `line_impedance`."
+            )
+
+            try:
+                conductor_df = read_conductor_impedance_database(
+                    file_path="database/line_data.xlsx",
+                    sheet_name="line_impedance",
+                )
+
+                conductor_df = make_streamlit_safe_columns(conductor_df)
+
+                st.session_state["line_database_df"] = conductor_df
+
+                st.markdown("#### Preview Database Line Impedance")
+
+                st.dataframe(conductor_df, use_container_width=True, height=300)
+
+                detected_columns = detect_impedance_columns(conductor_df)
+
+                st.markdown("#### Kolom yang Terdeteksi Otomatis")
+                st.json(detected_columns)
+
+                st.markdown("#### Koreksi Mapping Kolom Jika Perlu")
+
+                all_columns = ["None"] + list(conductor_df.columns)
+
+                def col_index(col_name):
+                    if col_name in all_columns:
+                        return all_columns.index(col_name)
+                    return 0
+
+                col_c1, col_c2, col_c3 = st.columns(3)
+
+                with col_c1:
+                    line_name_col = st.selectbox(
+                        "Kolom Line Name / BAY PHT",
+                        all_columns,
+                        index=col_index(detected_columns.get("line_name")),
+                        key="db_line_name_col",
+                    )
+
+                with col_c2:
+                    length_col = st.selectbox(
+                        "Kolom Length",
+                        all_columns,
+                        index=col_index(detected_columns.get("length")),
+                        key="db_length_col",
+                    )
+
+                with col_c3:
+                    bay_pht_col = st.selectbox(
+                        "Kolom BAY PHT",
+                        all_columns,
+                        index=col_index(detected_columns.get("bay_pht")),
+                        key="db_bay_pht_col",
+                    )
+
+                col_z1a, col_z1b, col_z1c, col_z1d = st.columns(4)
+
+                with col_z1a:
+                    z1_real_col = st.selectbox(
+                        "Kolom Z1 Real / R1",
+                        all_columns,
+                        index=col_index(detected_columns.get("z1_real")),
+                        key="db_z1_real_col",
+                    )
+
+                with col_z1b:
+                    z1_imag_col = st.selectbox(
+                        "Kolom Z1 Imag / X1",
+                        all_columns,
+                        index=col_index(detected_columns.get("z1_imag")),
+                        key="db_z1_imag_col",
+                    )
+
+                with col_z1c:
+                    z1_abs_col = st.selectbox(
+                        "Kolom Z1 Abs",
+                        all_columns,
+                        index=col_index(detected_columns.get("z1_abs")),
+                        key="db_z1_abs_col",
+                    )
+
+                with col_z1d:
+                    z1_angle_col = st.selectbox(
+                        "Kolom Z1 Angle",
+                        all_columns,
+                        index=col_index(detected_columns.get("z1_angle")),
+                        key="db_z1_angle_col",
+                    )
+
+                col_z0a, col_z0b, col_z0c, col_z0d = st.columns(4)
+
+                with col_z0a:
+                    z0_real_col = st.selectbox(
+                        "Kolom Z0 Real / R0",
+                        all_columns,
+                        index=col_index(detected_columns.get("z0_real")),
+                        key="db_z0_real_col",
+                    )
+
+                with col_z0b:
+                    z0_imag_col = st.selectbox(
+                        "Kolom Z0 Imag / X0",
+                        all_columns,
+                        index=col_index(detected_columns.get("z0_imag")),
+                        key="db_z0_imag_col",
+                    )
+
+                with col_z0c:
+                    z0_abs_col = st.selectbox(
+                        "Kolom Z0 Abs",
+                        all_columns,
+                        index=col_index(detected_columns.get("z0_abs")),
+                        key="db_z0_abs_col",
+                    )
+
+                with col_z0d:
+                    z0_angle_col = st.selectbox(
+                        "Kolom Z0 Angle",
+                        all_columns,
+                        index=col_index(detected_columns.get("z0_angle")),
+                        key="db_z0_angle_col",
+                    )
+
+                col_ratio1, col_ratio2, col_ratio3, col_ratio4 = st.columns(4)
+
+                with col_ratio1:
+                    ratio_gia_ct_col = st.selectbox(
+                        "Kolom Ratio GI A CT",
+                        all_columns,
+                        index=col_index(detected_columns.get("ratio_gia_ct")),
+                        key="db_ratio_gia_ct_col",
+                    )
+
+                with col_ratio2:
+                    ratio_gia_vt_col = st.selectbox(
+                        "Kolom Ratio GI A VT",
+                        all_columns,
+                        index=col_index(detected_columns.get("ratio_gia_vt")),
+                        key="db_ratio_gia_vt_col",
+                    )
+
+                with col_ratio3:
+                    ratio_gib_ct_col = st.selectbox(
+                        "Kolom Ratio GI B CT",
+                        all_columns,
+                        index=col_index(detected_columns.get("ratio_gib_ct")),
+                        key="db_ratio_gib_ct_col",
+                    )
+
+                with col_ratio4:
+                    ratio_gib_vt_col = st.selectbox(
+                        "Kolom Ratio GI B VT",
+                        all_columns,
+                        index=col_index(detected_columns.get("ratio_gib_vt")),
+                        key="db_ratio_gib_vt_col",
+                    )
+
+                corrected_columns = {
+                    "line_name": None if line_name_col == "None" else line_name_col,
+                    "bay_pht": None if bay_pht_col == "None" else bay_pht_col,
+                    "length": None if length_col == "None" else length_col,
+                    "z1_real": None if z1_real_col == "None" else z1_real_col,
+                    "z1_imag": None if z1_imag_col == "None" else z1_imag_col,
+                    "z1_abs": None if z1_abs_col == "None" else z1_abs_col,
+                    "z1_angle": None if z1_angle_col == "None" else z1_angle_col,
+                    "z0_real": None if z0_real_col == "None" else z0_real_col,
+                    "z0_imag": None if z0_imag_col == "None" else z0_imag_col,
+                    "z0_abs": None if z0_abs_col == "None" else z0_abs_col,
+                    "z0_angle": None if z0_angle_col == "None" else z0_angle_col,
+                    "ratio_gia_ct": None if ratio_gia_ct_col == "None" else ratio_gia_ct_col,
+                    "ratio_gia_vt": None if ratio_gia_vt_col == "None" else ratio_gia_vt_col,
+                    "ratio_gib_ct": None if ratio_gib_ct_col == "None" else ratio_gib_ct_col,
+                    "ratio_gib_vt": None if ratio_gib_vt_col == "None" else ratio_gib_vt_col,
+                    "gia_name": detected_columns.get("gia_name"),
+                    "gib_name": detected_columns.get("gib_name"),
+                    "conductor_type": detected_columns.get("conductor_type"),
+                }
+
+                row_labels = build_row_label(conductor_df, corrected_columns)
+
+                selected_row_label = st.selectbox(
+                    "Pilih baris data saluran / BAY PHT",
+                    row_labels,
+                    key="selected_database_line_row",
+                )
+
+                selected_row_index = row_labels.index(selected_row_label)
+                selected_row = conductor_df.iloc[selected_row_index]
+
+                excel_impedance_data = extract_impedance_from_row(
+                    selected_row,
+                    corrected_columns,
+                )
+
+                st.session_state["excel_impedance_data"] = excel_impedance_data
+
+                st.markdown("#### Data Impedansi yang Dipilih")
+
+                st.json(
+                    {
+                        "line_name": excel_impedance_data["line_name"],
+                        "bay_pht": excel_impedance_data["bay_pht"],
+                        "gi_a": excel_impedance_data["gi_a"],
+                        "gi_b": excel_impedance_data["gi_b"],
+                        "conductor_type": excel_impedance_data["conductor_type"],
+                        "length": excel_impedance_data["length"],
+                        "R1": excel_impedance_data["R1"],
+                        "X1": excel_impedance_data["X1"],
+                        "R0": excel_impedance_data["R0"],
+                        "X0": excel_impedance_data["X0"],
+                        "Z1_abs": excel_impedance_data["Z1_abs"],
+                        "Z1_angle_deg": excel_impedance_data["Z1_angle_deg"],
+                        "Z0_abs": excel_impedance_data["Z0_abs"],
+                        "Z0_angle_deg": excel_impedance_data["Z0_angle_deg"],
+                        "ratio_gia_ct": excel_impedance_data["ratio_gia_ct"],
+                        "ratio_gia_vt": excel_impedance_data["ratio_gia_vt"],
+                        "ratio_gib_ct": excel_impedance_data["ratio_gib_ct"],
+                        "ratio_gib_vt": excel_impedance_data["ratio_gib_vt"],
+                    }
+                )
+
+                if "excel_ratio_side" not in st.session_state:
+                    st.session_state["excel_ratio_side"] = "Tidak gunakan dari Excel"
+                
+                st.markdown("#### Pilihan Ratio CT/VT dari Database")
+
+                ratio_side = st.radio(
+                    "Gunakan ratio dari sisi GI mana?",
+                    ["Tidak gunakan dari Excel", "GI A", "GI B"],
+                    horizontal=True,
+                    key="excel_ratio_side",
+                )
+
+            except Exception as e:
+                st.error("Gagal membaca database line_data.xlsx.")
+                st.exception(e)
+
+        if "excel_impedance_data" in st.session_state:
+            excel_impedance_data = st.session_state["excel_impedance_data"]
+
         st.markdown("### Basic Line Data")
 
         col_lp1, col_lp2, col_lp3 = st.columns(3)
 
         with col_lp1:
+            default_line_name = "SUTT 150 kV GI A - GI B"
+
+            if excel_impedance_data and excel_impedance_data.get("line_name"):
+                default_line_name = str(excel_impedance_data["line_name"])
+
             line_name = st.text_input(
                 "Line Name",
-                value="SUTT 150 kV GI A - GI B",
+                value=default_line_name,
             )
 
         with col_lp2:
+            default_line_length = 75.0
+
+            if excel_impedance_data and excel_impedance_data.get("length"):
+                default_line_length = float(excel_impedance_data["length"])
+
             line_length = st.number_input(
                 "Line Length",
-                value=75.0,
+                value=default_line_length,
                 min_value=0.001,
                 step=1.0,
             )
@@ -1094,9 +1402,12 @@ with tab7:
         col_fmt1, col_fmt2 = st.columns(2)
 
         with col_fmt1:
+            default_impedance_input_index = 0
+
             impedance_input = st.radio(
                 "Impedance Input",
                 ["relative", "absolute"],
+                index=default_impedance_input_index,
                 horizontal=True,
                 help="Relative = ohm/km atau ohm/mile. Absolute = total ohm saluran.",
             )
@@ -1111,42 +1422,79 @@ with tab7:
 
         st.markdown("### Transformer Ratio for Secondary Impedance Conversion")
 
+        default_lp_ct_primary = 800.0
+        default_lp_ct_secondary = 1.0
+        default_lp_vt_primary = 150000.0
+        default_lp_vt_secondary = 100.0
+
+        if excel_impedance_data:
+            ratio_side = st.session_state.get("excel_ratio_side", "Tidak gunakan dari Excel")
+
+            if ratio_side == "GI A":
+                ct_data = excel_impedance_data.get("ratio_gia_ct")
+                vt_data = excel_impedance_data.get("ratio_gia_vt")
+
+                if ct_data:
+                    default_lp_ct_primary = float(ct_data["primary"])
+                    default_lp_ct_secondary = float(ct_data["secondary"])
+
+                if vt_data:
+                    default_lp_vt_primary = float(vt_data["primary"])
+                    default_lp_vt_secondary = float(vt_data["secondary"])
+
+            elif ratio_side == "GI B":
+                ct_data = excel_impedance_data.get("ratio_gib_ct")
+                vt_data = excel_impedance_data.get("ratio_gib_vt")
+
+                if ct_data:
+                    default_lp_ct_primary = float(ct_data["primary"])
+                    default_lp_ct_secondary = float(ct_data["secondary"])
+
+                if vt_data:
+                    default_lp_vt_primary = float(vt_data["primary"])
+                    default_lp_vt_secondary = float(vt_data["secondary"])
+
         col_tr1, col_tr2, col_tr3, col_tr4 = st.columns(4)
 
         with col_tr1:
             lp_ct_primary = st.number_input(
                 "Line CT Primary (A)",
-                value=800.0,
+                value=default_lp_ct_primary,
                 min_value=0.001,
             )
 
         with col_tr2:
             lp_ct_secondary = st.number_input(
                 "Line CT Secondary (A)",
-                value=1.0,
+                value=default_lp_ct_secondary,
                 min_value=0.001,
             )
 
         with col_tr3:
             lp_vt_primary = st.number_input(
                 "Line VT Primary (V)",
-                value=150000.0,
+                value=default_lp_vt_primary,
                 min_value=0.001,
             )
 
         with col_tr4:
             lp_vt_secondary = st.number_input(
                 "Line VT Secondary (V)",
-                value=100.0,
+                value=default_lp_vt_secondary,
                 min_value=0.001,
             )
 
         st.markdown("### Positive-Sequence System")
 
+        if excel_impedance_data:
+            positive_sequence_default_index = 0  # R_X
+        else:
+            positive_sequence_default_index = 0
+
         positive_sequence_mode = st.selectbox(
             "Positive-Sequence Input Mode",
             ["R_X", "Z_PHI", "X_PHI"],
-            index=0,
+            index=positive_sequence_default_index,
         )
 
         r1 = None
@@ -1158,15 +1506,22 @@ with tab7:
             col_z1a, col_z1b = st.columns(2)
 
             with col_z1a:
+                default_r1 = 0.08
+                default_x1 = 0.42
+
+                if excel_impedance_data:
+                    default_r1 = float(excel_impedance_data["R1"])
+                    default_x1 = float(excel_impedance_data["X1"])
+
                 r1 = st.number_input(
                     "R1 / R1' (ohm or ohm/km)",
-                    value=0.08,
+                    value=default_r1,
                 )
 
             with col_z1b:
                 x1 = st.number_input(
                     "X1 / X1' (ohm or ohm/km)",
-                    value=0.42,
+                    value=default_x1,
                 )
 
         elif positive_sequence_mode == "Z_PHI":
@@ -1220,15 +1575,22 @@ with tab7:
             col_z0a, col_z0b = st.columns(2)
 
             with col_z0a:
+                default_r0 = 0.25
+                default_x0 = 1.25
+
+                if excel_impedance_data:
+                    default_r0 = float(excel_impedance_data["R0"])
+                    default_x0 = float(excel_impedance_data["X0"])
+
                 r0 = st.number_input(
                     "R0 / R0' (ohm or ohm/km)",
-                    value=0.25,
+                    value=default_r0,
                 )
 
             with col_z0b:
                 x0 = st.number_input(
                     "X0 / X0' (ohm or ohm/km)",
-                    value=1.25,
+                    value=default_x0,
                 )
 
         elif zero_sequence_mode == "RE_RL_XE_XL":
@@ -1284,6 +1646,15 @@ with tab7:
             st.warning(
                 "Catatan: pada aplikasi ini kL diasumsikan sebagai ZE/Z1, "
                 "dengan ZE = (Z0 - Z1) / 3. Pastikan definisi ini sesuai dengan setting relay."
+            )
+        
+        if excel_impedance_data:
+            st.success(
+                "Parameter Z1 dan Z0 menggunakan data dari Excel impedansi konduktor/saluran."
+            )
+        else:
+            st.info(
+                "Parameter Z1 dan Z0 menggunakan input manual."
             )
 
         st.markdown("### Normalize Parameter")
@@ -1580,6 +1951,263 @@ with tab8:
 
 
 with tab9:
+    st.subheader("Single-Ended Fault Locator")
+
+    st.write(
+        "Fitur ini menghitung estimasi jarak gangguan dari satu ujung relay distance "
+        "berdasarkan fasor, jenis gangguan, dan parameter saluran."
+    )
+
+    if "phasors" not in st.session_state:
+        st.warning("Silakan lakukan Step 5: Phasor Calculation terlebih dahulu.")
+        st.stop()
+
+    if "fault_type_result" not in st.session_state:
+        st.warning("Silakan lakukan Step 6: Fault Type Detection terlebih dahulu.")
+        st.stop()
+
+    if "line_param" not in st.session_state:
+        st.warning("Silakan lakukan Step 7: Line Parameter terlebih dahulu.")
+        st.stop()
+
+    phasors = st.session_state["phasors"]
+    fault_type_result = st.session_state["fault_type_result"]
+    line_param = st.session_state["line_param"]
+
+    st.markdown("### Input Perhitungan")
+
+    col_se1, col_se2, col_se3, col_se4 = st.columns(4)
+
+    col_se1.metric("Fault Type", fault_type_result.get("fault_type", "-"))
+    col_se2.metric("Line Length", f'{line_param["length_km"]:.3f} km')
+    col_se3.metric("Z1/km", f'{line_param["Z1_per_km"].real:.4f} + j{line_param["Z1_per_km"].imag:.4f}')
+    col_se4.metric("K0", f'{line_param["K0"].real:.4f} + j{line_param["K0"].imag:.4f}')
+
+    st.markdown("### Metode Rekomendasi Jarak")
+
+    recommended_method = st.selectbox(
+        "Pilih metode jarak utama",
+        [
+            "reactance",
+            "projection",
+            "magnitude",
+        ],
+        index=0,
+        help=(
+            "Reactance cocok untuk mengurangi pengaruh tahanan gangguan. "
+            "Projection memproyeksikan Zapp ke arah sudut Z1. "
+            "Magnitude sederhana, tetapi mudah bias untuk high resistance fault."
+        ),
+    )
+
+    if st.button("Calculate Single-Ended Fault Location"):
+        try:
+            single_result = calculate_single_ended_fault_location(
+                phasors=phasors,
+                fault_type_result=fault_type_result,
+                line_param=line_param,
+                recommended_method=recommended_method,
+            )
+
+            single_df = build_single_ended_result_dataframe(single_result)
+
+            st.session_state["single_ended_result"] = single_result
+            st.session_state["single_ended_df"] = single_df
+
+            st.success("Single-ended fault location berhasil dihitung.")
+
+        except Exception as e:
+            st.error("Perhitungan single-ended gagal.")
+            st.exception(e)
+
+    if "single_ended_result" in st.session_state:
+        single_result = st.session_state["single_ended_result"]
+        single_df = st.session_state["single_ended_df"]
+
+        st.markdown("### Hasil Utama")
+
+        col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+
+        col_r1.metric(
+            "Recommended Distance",
+            f'{single_result["recommended_distance_km"]:.3f} km',
+        )
+
+        col_r2.metric(
+            "Distance %",
+            f'{single_result["recommended_distance_percent"]:.2f} %',
+        )
+
+        col_r3.metric(
+            "Zapp",
+            f'{single_result["Zapp_R"]:.3f} + j{single_result["Zapp_X"]:.3f} Ω',
+        )
+
+        col_r4.metric(
+            "Status",
+            single_result["status"],
+        )
+
+        if single_result["status"] == "VALID":
+            st.success("Hasil single-ended berada dalam batas normal.")
+        elif single_result["status"] == "CHECK":
+            st.warning("Hasil single-ended perlu dicek ulang dengan waveform, SOE, dan data lapangan.")
+        else:
+            st.error("Hasil single-ended tidak pasti. Cek polaritas, line parameter, dan fault type.")
+
+        if single_result["warnings"]:
+            st.markdown("### Warning")
+            for warning in single_result["warnings"]:
+                st.warning(warning)
+
+        st.markdown("### Detail Perhitungan")
+
+        st.dataframe(
+            single_df.style.format(
+                {
+                    "Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x
+                }
+            ),
+            use_container_width=True,
+        )
+
+        st.markdown("### Perbandingan Metode Jarak")
+
+        distance_df = pd.DataFrame(
+            {
+                "Method": [
+                    "Magnitude",
+                    "Reactance",
+                    "Projection",
+                    "Recommended",
+                ],
+                "Distance km": [
+                    single_result["distance_mag_km"],
+                    single_result["distance_x_km"],
+                    single_result["distance_projection_km"],
+                    single_result["recommended_distance_km"],
+                ],
+                "Distance %": [
+                    single_result["distance_mag_percent"],
+                    single_result["distance_x_percent"],
+                    single_result["distance_projection_percent"],
+                    single_result["recommended_distance_percent"],
+                ],
+            }
+        )
+
+        st.dataframe(
+            distance_df.style.format(
+                {
+                    "Distance km": "{:.3f}",
+                    "Distance %": "{:.2f}",
+                }
+            ),
+            use_container_width=True,
+        )
+
+        fig_dist = px.bar(
+            distance_df,
+            x="Method",
+            y="Distance km",
+            text_auto=".2f",
+            title="Perbandingan Estimasi Jarak Single-Ended",
+        )
+
+        st.plotly_chart(fig_dist, use_container_width=True)
+
+        st.markdown("### Diagram R-X")
+
+        z1_total = line_param["Z1_total"]
+        zapp = single_result["Zapp"]
+        recommended_distance = single_result["recommended_distance_km"]
+        z_recommended_line = recommended_distance * line_param["Z1_per_km"]
+
+        rx_df = pd.DataFrame(
+            {
+                "Point": [
+                    "Origin",
+                    "Z1 Total",
+                    "Zapp",
+                    "Projected Fault Point",
+                ],
+                "R": [
+                    0.0,
+                    z1_total.real,
+                    zapp.real,
+                    z_recommended_line.real,
+                ],
+                "X": [
+                    0.0,
+                    z1_total.imag,
+                    zapp.imag,
+                    z_recommended_line.imag,
+                ],
+            }
+        )
+
+        fig_rx = px.scatter(
+            rx_df,
+            x="R",
+            y="X",
+            text="Point",
+            title="Single-Ended R-X Diagram",
+        )
+
+        fig_rx.add_shape(
+            type="line",
+            x0=0,
+            y0=0,
+            x1=z1_total.real,
+            y1=z1_total.imag,
+        )
+
+        fig_rx.add_shape(
+            type="line",
+            x0=0,
+            y0=0,
+            x1=zapp.real,
+            y1=zapp.imag,
+            line=dict(dash="dash"),
+        )
+
+        fig_rx.add_shape(
+            type="line",
+            x0=0,
+            y0=0,
+            x1=z_recommended_line.real,
+            y1=z_recommended_line.imag,
+            line=dict(dash="dot"),
+        )
+
+        fig_rx.update_traces(textposition="top center")
+
+        fig_rx.update_layout(
+            xaxis_title="R (ohm)",
+            yaxis_title="X (ohm)",
+            yaxis=dict(scaleanchor="x", scaleratio=1),
+        )
+
+        st.plotly_chart(fig_rx, use_container_width=True)
+
+        st.markdown("### Interpretasi")
+
+        st.write(
+            f"Loop yang digunakan adalah **{single_result['selected_loop']}**. "
+            f"Impedansi terlihat relay adalah **{single_result['Zapp_R']:.4f} + "
+            f"j{single_result['Zapp_X']:.4f} Ω**. "
+            f"Jarak rekomendasi dari ujung relay adalah **{single_result['recommended_distance_km']:.3f} km** "
+            f"atau **{single_result['recommended_distance_percent']:.2f}%** dari panjang saluran."
+        )
+
+        if abs(single_result["Rf_est_ohm"]) > 10:
+            st.warning(
+                f"Estimasi tahanan gangguan adalah {single_result['Rf_est_ohm']:.3f} Ω. "
+                "Nilai ini cukup besar sehingga hasil single-ended dapat bergeser, terutama pada gangguan high resistance."
+            )
+
+
+with tab10:
     st.subheader("Two-Ended Fault Locator")
 
     st.write(
