@@ -1,5 +1,7 @@
 import streamlit as st
 import tempfile
+import math
+import cmath
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -81,6 +83,26 @@ def make_streamlit_safe_columns(df):
     safe_df.columns = new_columns
 
     return safe_df
+
+
+def invert_current_phasors(phasors):
+    inverted = {}
+
+    for name, value in phasors.items():
+        phasor_value = value["complex"]
+
+        if name in ["Ia", "Ib", "Ic", "IE", "I0", "I1", "I2"]:
+            phasor_value = -phasor_value
+
+        inverted[name] = {
+            "complex": phasor_value,
+            "real": phasor_value.real,
+            "imag": phasor_value.imag,
+            "magnitude": abs(phasor_value),
+            "angle_deg": math.degrees(cmath.phase(phasor_value)),
+        }
+
+    return inverted
 
 
 st.set_page_config(
@@ -1109,31 +1131,87 @@ with tab7:
             [
                 "Input Manual",
                 "Database Excel Line Data",
+                "Database Excel Cable Data",
             ],
             horizontal=True,
         )
 
         excel_impedance_data = None
 
-        if line_parameter_source == "Database Excel Line Data":
-            st.markdown("### Database Excel Data Impedansi Saluran")
+        if line_parameter_source in ["Database Excel Line Data", "Database Excel Cable Data"]:
+            use_cable_database = line_parameter_source == "Database Excel Cable Data"
+            database_file_path = (
+                "database/cable_data.xlsx"
+                if use_cable_database
+                else "database/line_data.xlsx"
+            )
+            database_title = (
+                "Database Excel Data Impedansi Konduktor"
+                if use_cable_database
+                else "Database Excel Data Impedansi Saluran"
+            )
+            database_preview_title = (
+                "Preview Database Cable Impedance"
+                if use_cable_database
+                else "Preview Database Line Impedance"
+            )
+            selected_row_label_text = (
+                "Pilih jenis konduktor dari cable_data.xlsx"
+                if use_cable_database
+                else "Pilih baris data saluran / BAY PHT"
+            )
+
+            st.markdown(f"### {database_title}")
 
             st.info(
                 "Aplikasi membaca data impedansi dari file lokal: "
-                "`database/line_data.xlsx`, sheet: `line_impedance`."
+                f"`{database_file_path}`, sheet: `line_impedance`."
             )
+
+            if use_cable_database:
+                st.warning(
+                    "Gunakan opsi ini jika nama line tidak tersedia di line_data.xlsx. "
+                    "Aplikasi akan mengambil Z1/Z0 per km dari data konduktor, "
+                    "sedangkan nama line dan panjang saluran tetap diisi pada form Basic Line Data."
+                )
 
             try:
                 conductor_df = read_conductor_impedance_database(
-                    file_path="database/line_data.xlsx",
+                    file_path=database_file_path,
                     sheet_name="line_impedance",
                 )
 
                 conductor_df = make_streamlit_safe_columns(conductor_df)
 
+                if use_cable_database:
+                    detected_for_unique = detect_impedance_columns(conductor_df)
+                    unique_subset = [
+                        detected_for_unique.get(key)
+                        for key in [
+                            "conductor_type",
+                            "circuit_count",
+                            "z1_real",
+                            "z1_imag",
+                            "z0_real",
+                            "z0_imag",
+                            "z1_abs",
+                            "z1_angle",
+                            "z0_abs",
+                            "z0_angle",
+                        ]
+                        if detected_for_unique.get(key)
+                    ]
+
+                    if unique_subset:
+                        conductor_df = (
+                            conductor_df
+                            .drop_duplicates(subset=unique_subset)
+                            .reset_index(drop=True)
+                        )
+
                 st.session_state["line_database_df"] = conductor_df
 
-                st.markdown("#### Preview Database Line Impedance")
+                st.markdown(f"#### {database_preview_title}")
 
                 st.dataframe(conductor_df, use_container_width=True, height=300)
 
@@ -1295,17 +1373,31 @@ with tab7:
                     "ratio_gia_vt": None if ratio_gia_vt_col == "None" else ratio_gia_vt_col,
                     "ratio_gib_ct": None if ratio_gib_ct_col == "None" else ratio_gib_ct_col,
                     "ratio_gib_vt": None if ratio_gib_vt_col == "None" else ratio_gib_vt_col,
-                    "gia_name": detected_columns.get("gia_name"),
-                    "gib_name": detected_columns.get("gib_name"),
+                    "gia_name": None if use_cable_database else detected_columns.get("gia_name"),
+                    "gib_name": None if use_cable_database else detected_columns.get("gib_name"),
                     "conductor_type": detected_columns.get("conductor_type"),
+                    "circuit_count": detected_columns.get("circuit_count"),
                 }
+
+                if use_cable_database:
+                    corrected_columns["line_name"] = None
+                    corrected_columns["bay_pht"] = None
+                    corrected_columns["length"] = None
+                    corrected_columns["ratio_gia_ct"] = None
+                    corrected_columns["ratio_gia_vt"] = None
+                    corrected_columns["ratio_gib_ct"] = None
+                    corrected_columns["ratio_gib_vt"] = None
 
                 row_labels = build_row_label(conductor_df, corrected_columns)
 
                 selected_row_label = st.selectbox(
-                    "Pilih baris data saluran / BAY PHT",
+                    selected_row_label_text,
                     row_labels,
-                    key="selected_database_line_row",
+                    key=(
+                        "selected_database_cable_row"
+                        if use_cable_database
+                        else "selected_database_line_row"
+                    ),
                 )
 
                 selected_row_index = row_labels.index(selected_row_label)
@@ -1317,6 +1409,7 @@ with tab7:
                 )
 
                 st.session_state["excel_impedance_data"] = excel_impedance_data
+                st.session_state["excel_impedance_source"] = line_parameter_source
 
                 st.markdown("#### Data Impedansi yang Dipilih")
 
@@ -1346,20 +1439,27 @@ with tab7:
                 if "excel_ratio_side" not in st.session_state:
                     st.session_state["excel_ratio_side"] = "Tidak gunakan dari Excel"
                 
-                st.markdown("#### Pilihan Ratio CT/VT dari Database")
+                if not use_cable_database:
+                    st.markdown("#### Pilihan Ratio CT/VT dari Database")
 
-                ratio_side = st.radio(
-                    "Gunakan ratio dari sisi GI mana?",
-                    ["Tidak gunakan dari Excel", "GI A", "GI B"],
-                    horizontal=True,
-                    key="excel_ratio_side",
-                )
+                    ratio_side = st.radio(
+                        "Gunakan ratio dari sisi GI mana?",
+                        ["Tidak gunakan dari Excel", "GI A", "GI B"],
+                        horizontal=True,
+                        key="excel_ratio_side",
+                    )
+                else:
+                    st.session_state["excel_ratio_side"] = "Tidak gunakan dari Excel"
 
             except Exception as e:
-                st.error("Gagal membaca database line_data.xlsx.")
+                st.error(f"Gagal membaca database {database_file_path}.")
                 st.exception(e)
 
-        if "excel_impedance_data" in st.session_state:
+        if (
+            line_parameter_source != "Input Manual"
+            and st.session_state.get("excel_impedance_source") == line_parameter_source
+            and "excel_impedance_data" in st.session_state
+        ):
             excel_impedance_data = st.session_state["excel_impedance_data"]
 
         st.markdown("### Basic Line Data")
@@ -1371,6 +1471,14 @@ with tab7:
 
             if excel_impedance_data and excel_impedance_data.get("line_name"):
                 default_line_name = str(excel_impedance_data["line_name"])
+            elif (
+                line_parameter_source == "Database Excel Cable Data"
+                and excel_impedance_data
+                and excel_impedance_data.get("conductor_type")
+            ):
+                default_line_name = (
+                    f"Line baru - {excel_impedance_data['conductor_type']}"
+                )
 
             line_name = st.text_input(
                 "Line Name",
@@ -2713,10 +2821,67 @@ with tab10:
 
                 two_quality = evaluate_two_ended_quality(two_result, line_param)
 
+            single_ended_compare_error = None
+
+            try:
+                local_fault_type_result = st.session_state.get("fault_type_result")
+
+                if local_fault_type_result is None:
+                    local_fault_type_result = detect_fault_type(local_phasors)
+
+                remote_fault_type_result = detect_fault_type(remote_phasors)
+                remote_single_phasors = remote_phasors
+
+                if two_result["remote_current_direction"] == "opposite_to_line":
+                    remote_single_phasors = invert_current_phasors(remote_phasors)
+
+                local_single_result = calculate_single_ended_fault_location(
+                    phasors=local_phasors,
+                    fault_type_result=local_fault_type_result,
+                    line_param=line_param,
+                    recommended_method="reactance",
+                )
+
+                remote_single_result = calculate_single_ended_fault_location(
+                    phasors=remote_single_phasors,
+                    fault_type_result=remote_fault_type_result,
+                    line_param=line_param,
+                    recommended_method="reactance",
+                )
+
+                local_single_df = build_single_ended_result_dataframe(local_single_result)
+                remote_single_df = build_single_ended_result_dataframe(remote_single_result)
+
+                st.session_state["two_ended_local_single_result"] = local_single_result
+                st.session_state["two_ended_remote_single_result"] = remote_single_result
+                st.session_state["two_ended_local_single_df"] = local_single_df
+                st.session_state["two_ended_remote_single_df"] = remote_single_df
+                st.session_state["two_ended_local_fault_type_result"] = local_fault_type_result
+                st.session_state["two_ended_remote_fault_type_result"] = remote_fault_type_result
+
+            except Exception as single_ended_error:
+                single_ended_compare_error = str(single_ended_error)
+                for key in [
+                    "two_ended_local_single_result",
+                    "two_ended_remote_single_result",
+                    "two_ended_local_single_df",
+                    "two_ended_remote_single_df",
+                    "two_ended_local_fault_type_result",
+                    "two_ended_remote_fault_type_result",
+                ]:
+                    st.session_state.pop(key, None)
+
             st.session_state["two_ended_result"] = two_result
             st.session_state["two_ended_quality"] = two_quality
+            st.session_state["two_ended_single_ended_error"] = single_ended_compare_error
 
             st.success("Two-ended fault location berhasil dihitung.")
+
+            if single_ended_compare_error:
+                st.warning(
+                    "Two-ended berhasil, tetapi single-ended comparison gagal: "
+                    f"{single_ended_compare_error}"
+                )
 
         except Exception as e:
             st.error("Two-ended fault location gagal.")
@@ -2761,6 +2926,135 @@ with tab10:
             use_container_width=True,
         )
 
+        if st.session_state.get("two_ended_single_ended_error"):
+            st.warning(
+                "Single-ended comparison belum dapat ditampilkan: "
+                f"{st.session_state['two_ended_single_ended_error']}"
+            )
+
+        if (
+            "two_ended_local_single_result" in st.session_state
+            and "two_ended_remote_single_result" in st.session_state
+        ):
+            local_single_result = st.session_state["two_ended_local_single_result"]
+            remote_single_result = st.session_state["two_ended_remote_single_result"]
+            local_single_df = st.session_state["two_ended_local_single_df"]
+            remote_single_df = st.session_state["two_ended_remote_single_df"]
+            local_fault_type_result = st.session_state.get(
+                "two_ended_local_fault_type_result",
+                {},
+            )
+            remote_fault_type_result = st.session_state.get(
+                "two_ended_remote_fault_type_result",
+                {},
+            )
+
+            st.markdown("### Single-Ended Comparison")
+
+            L = line_param["length_km"]
+            remote_single_from_local_km = (
+                L - remote_single_result["recommended_distance_km"]
+            )
+            remote_single_from_local_percent = remote_single_from_local_km / L * 100.0
+
+            col_se1, col_se2, col_se3, col_se4 = st.columns(4)
+
+            col_se1.metric(
+                "Local SE from Local",
+                f'{local_single_result["recommended_distance_km"]:.3f} km',
+            )
+            col_se2.metric(
+                "Remote SE from Remote",
+                f'{remote_single_result["recommended_distance_km"]:.3f} km',
+            )
+            col_se3.metric(
+                "Remote SE from Local",
+                f"{remote_single_from_local_km:.3f} km",
+            )
+            col_se4.metric(
+                "Remote SE from Local %",
+                f"{remote_single_from_local_percent:.2f} %",
+            )
+
+            st.caption(
+                "Remote single-ended ditampilkan sebagai jarak dari remote end dan "
+                "konversinya ke referensi local end. Jika arah arus remote dipilih "
+                "`opposite_to_line`, arus fasor remote dibalik untuk perhitungan single-ended."
+            )
+
+            se_summary_df = pd.DataFrame(
+                [
+                    {
+                        "End": "Local GI",
+                        "Fault Type": local_fault_type_result.get("fault_type", "-"),
+                        "Selected Loop": local_single_result["selected_loop"],
+                        "Distance from Own End km": local_single_result["recommended_distance_km"],
+                        "Distance from Local End km": local_single_result["recommended_distance_km"],
+                        "Distance from Local End %": local_single_result["recommended_distance_percent"],
+                        "Zapp R ohm": local_single_result["Zapp_R"],
+                        "Zapp X ohm": local_single_result["Zapp_X"],
+                        "Rf Est ohm": local_single_result["Rf_est_ohm"],
+                        "Status": local_single_result["status"],
+                    },
+                    {
+                        "End": "Remote GI",
+                        "Fault Type": remote_fault_type_result.get("fault_type", "-"),
+                        "Selected Loop": remote_single_result["selected_loop"],
+                        "Distance from Own End km": remote_single_result["recommended_distance_km"],
+                        "Distance from Local End km": remote_single_from_local_km,
+                        "Distance from Local End %": remote_single_from_local_percent,
+                        "Zapp R ohm": remote_single_result["Zapp_R"],
+                        "Zapp X ohm": remote_single_result["Zapp_X"],
+                        "Rf Est ohm": remote_single_result["Rf_est_ohm"],
+                        "Status": remote_single_result["status"],
+                    },
+                ]
+            )
+
+            st.dataframe(
+                se_summary_df.style.format(
+                    {
+                        "Distance from Own End km": "{:.6f}",
+                        "Distance from Local End km": "{:.6f}",
+                        "Distance from Local End %": "{:.2f}",
+                        "Zapp R ohm": "{:.6f}",
+                        "Zapp X ohm": "{:.6f}",
+                        "Rf Est ohm": "{:.6f}",
+                    }
+                ),
+                use_container_width=True,
+            )
+
+            with st.expander("Detail Single-Ended Local GI"):
+                st.dataframe(
+                    local_single_df.style.format(
+                        {
+                            "Value": lambda x: f"{x:.6f}"
+                            if isinstance(x, (int, float))
+                            else x
+                        }
+                    ),
+                    use_container_width=True,
+                )
+
+            with st.expander("Detail Single-Ended Remote GI"):
+                st.dataframe(
+                    remote_single_df.style.format(
+                        {
+                            "Value": lambda x: f"{x:.6f}"
+                            if isinstance(x, (int, float))
+                            else x
+                        }
+                    ),
+                    use_container_width=True,
+                )
+
+            for warning in local_single_result["warnings"]:
+                st.warning(f"Local GI single-ended: {warning}")
+
+            for warning in remote_single_result["warnings"]:
+                st.warning(f"Remote GI single-ended: {warning}")
+
         if two_quality["warnings"]:
             st.markdown("### Warning")
             for warning in two_quality["warnings"]:
@@ -2770,12 +3064,26 @@ with tab10:
 
         L = line_param["length_km"]
         d = two_result["distance_km"]
+        point_names = ["Local End", "Two-Ended Fault", "Remote End"]
+        point_distances = [0.0, d, L]
+
+        if "two_ended_local_single_result" in st.session_state:
+            point_names.append("Local Single-Ended")
+            point_distances.append(
+                st.session_state["two_ended_local_single_result"]["recommended_distance_km"]
+            )
+
+        if "two_ended_remote_single_result" in st.session_state:
+            point_names.append("Remote Single-Ended")
+            point_distances.append(
+                L - st.session_state["two_ended_remote_single_result"]["recommended_distance_km"]
+            )
 
         pos_df = pd.DataFrame(
             {
-                "Point": ["Local End", "Fault Point", "Remote End"],
-                "Distance km": [0.0, d, L],
-                "Y": [0.0, 0.0, 0.0],
+                "Point": point_names,
+                "Distance km": point_distances,
+                "Y": [0.0] * len(point_names),
             }
         )
 

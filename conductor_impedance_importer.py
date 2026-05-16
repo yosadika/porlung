@@ -253,6 +253,7 @@ def detect_impedance_columns(df: pd.DataFrame):
         "conductor_type": find_column(
             df,
             [
+                "JENIS",
                 "JENIS KONDUKTOR",
                 "KONDUKTOR",
                 "CONDUCTOR",
@@ -625,6 +626,7 @@ def build_row_label(df: pd.DataFrame, columns: dict):
     gib_col = columns.get("gib_name")
     length_col = columns.get("length")
     conductor_col = columns.get("conductor_type")
+    circuit_col = columns.get("circuit_count")
 
     for idx, row in df.iterrows():
         parts = [f"Row {idx + 1}"]
@@ -640,6 +642,9 @@ def build_row_label(df: pd.DataFrame, columns: dict):
 
         if conductor_col:
             parts.append(str(row[conductor_col]))
+
+        if circuit_col:
+            parts.append(f"Sirkit={row[circuit_col]}")
 
         labels.append(" | ".join(parts))
 
