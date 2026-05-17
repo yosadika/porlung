@@ -614,12 +614,97 @@ with tab4:
             step=1
         )
 
+    with st.expander("Advanced Fault Bar Tuning"):
+        use_advanced_fault_detection = st.checkbox(
+            "Use Advanced Fault Detection",
+            value=False,
+            help="Aktifkan hanya jika fault bar otomatis kurang presisi pada record lokal.",
+        )
+
+        fault_detection_method = st.selectbox(
+            "Fault Detection Method",
+            ["legacy_rms", "hybrid_superimposed"],
+            index=1,
+            disabled=not use_advanced_fault_detection,
+            help="hybrid_superimposed memakai energi perubahan satu siklus lalu divalidasi RMS.",
+        )
+
+        col_adv1, col_adv2, col_adv3, col_adv4 = st.columns(4)
+
+        with col_adv1:
+            adaptive_threshold_sigma = st.number_input(
+                "Adaptive Threshold Sigma",
+                value=6.0,
+                min_value=2.0,
+                max_value=20.0,
+                step=0.5,
+                help="Threshold adaptif terhadap noise pre-fault. Lebih kecil = lebih sensitif.",
+                disabled=not use_advanced_fault_detection,
+            )
+
+        with col_adv2:
+            superimposed_threshold_sigma = st.number_input(
+                "Superimposed Threshold Sigma",
+                value=8.0,
+                min_value=2.0,
+                max_value=30.0,
+                step=0.5,
+                disabled=(
+                    not use_advanced_fault_detection
+                    or fault_detection_method != "hybrid_superimposed"
+                ),
+                help="Threshold energi superimposed terhadap baseline pre-fault.",
+            )
+
+        with col_adv3:
+            consecutive_samples_input = st.number_input(
+                "Consecutive Samples",
+                value=0,
+                min_value=0,
+                max_value=200,
+                step=1,
+                help="0 = otomatis sekitar 0.1 siklus. Nilai lebih besar menolak spike sesaat.",
+                disabled=not use_advanced_fault_detection,
+            )
+
+        with col_adv4:
+            refine_fault_bar = st.checkbox(
+                "Refine Fault Bar",
+                value=True,
+                help="Backtrack dari kandidat RMS ke perubahan instantaneous awal.",
+                disabled=not use_advanced_fault_detection,
+            )
+
     detection = detect_fault_inception(
         assigned_df,
         frequency=frequency,
         current_threshold_multiplier=current_threshold_multiplier,
         voltage_drop_threshold=voltage_drop_threshold,
         min_prefault_cycles=int(pre_fault_cycles),
+        adaptive_threshold_sigma=(
+            adaptive_threshold_sigma
+            if use_advanced_fault_detection
+            else None
+        ),
+        consecutive_samples=(
+            None
+            if (
+                not use_advanced_fault_detection
+                or int(consecutive_samples_input) == 0
+            )
+            else int(consecutive_samples_input)
+        ),
+        refine_fault_bar=(
+            refine_fault_bar
+            if use_advanced_fault_detection
+            else False
+        ),
+        method=(
+            fault_detection_method
+            if use_advanced_fault_detection
+            else "legacy_rms"
+        ),
+        superimposed_threshold_sigma=superimposed_threshold_sigma,
     )
 
     st.session_state["fault_detection"] = detection
@@ -646,6 +731,23 @@ with tab4:
 
         st.write("Sampling Rate:", f'{detection["fs"]:.2f} Hz')
         st.write("Samples per Cycle:", detection["samples_per_cycle"])
+
+        if detection.get("refine_fault_bar"):
+            st.caption(
+                "Fault bar refinement: "
+                f'RMS candidate {detection["rms_fault_time"]:.6f} s -> '
+                f'refined {detection["fault_time"]:.6f} s. '
+                f'Confidence {detection.get("confidence_score", 0):.2f}/10, '
+                f'consecutive samples {detection.get("consecutive_samples", "-")}.'
+            )
+
+        if detection.get("superimposed"):
+            superimposed = detection["superimposed"]
+            st.caption(
+                "Superimposed detector: "
+                f'threshold {superimposed["threshold"]:.6f}, '
+                f'peak energy {superimposed.get("peak_energy", 0.0):.6f}.'
+            )
 
     else:
         st.warning(detection["message"])
