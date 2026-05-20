@@ -235,6 +235,7 @@ def calculate_single_ended_fault_location(
     fault_type_result: dict,
     line_param: dict,
     recommended_method: str = "reactance",
+    prefault_phasors: dict | None = None,
 ):
     fault_type = normalize_fault_type(fault_type_result.get("fault_type", "UNKNOWN"))
 
@@ -249,6 +250,7 @@ def calculate_single_ended_fault_location(
     )
 
     zapp = loop["Zapp"]
+    selected_loop = loop["selected_loop"]
 
     distance_mag_km = calculate_distance_by_magnitude(zapp, z1_per_km)
     distance_x_km = calculate_distance_by_reactance(zapp, z1_per_km)
@@ -260,6 +262,7 @@ def calculate_single_ended_fault_location(
         recommended_distance_km = distance_proj_km
     else:
         recommended_distance_km = distance_x_km
+    effective_recommended_method = recommended_method
 
     recommended_distance_percent = recommended_distance_km / line_length_km * 100.0
 
@@ -268,6 +271,45 @@ def calculate_single_ended_fault_location(
         z1_per_km=z1_per_km,
         distance_km=recommended_distance_km,
     )
+
+    superimposed_zapp = None
+    superimposed_distance_x_km = None
+    superimposed_distance_projection_km = None
+    superimposed_loop_current_mag = 0.0
+    phase_current_change_pct = None
+    phase_current_depressed = False
+
+    if prefault_phasors is not None and selected_loop in ["AG", "BG", "CG"]:
+        phase = selected_loop[0]
+        v_name = f"V{phase.lower()}"
+        i_name = f"I{phase.lower()}"
+
+        if all(name in prefault_phasors and name in phasors for name in [v_name, i_name, "I0"]):
+            delta_voltage = phasors[v_name]["complex"] - prefault_phasors[v_name]["complex"]
+            delta_current = phasors[i_name]["complex"] - prefault_phasors[i_name]["complex"]
+            delta_i0 = phasors["I0"]["complex"] - prefault_phasors.get("I0", {"complex": 0j})["complex"]
+            delta_loop_current = delta_current + k0 * delta_i0
+
+            if abs(delta_loop_current) > 1e-9:
+                superimposed_zapp = delta_voltage / delta_loop_current
+                superimposed_distance_x_km = calculate_distance_by_reactance(
+                    superimposed_zapp,
+                    z1_per_km,
+                )
+                superimposed_distance_projection_km = calculate_distance_by_projection(
+                    superimposed_zapp,
+                    z1_per_km,
+                )
+                superimposed_loop_current_mag = abs(delta_loop_current)
+
+            prefault_current_mag = abs(prefault_phasors[i_name]["complex"])
+            fault_current_mag = abs(phasors[i_name]["complex"])
+            phase_current_change_pct = (
+                (fault_current_mag - prefault_current_mag)
+                / max(prefault_current_mag, 1e-9)
+                * 100.0
+            )
+            phase_current_depressed = phase_current_change_pct <= -5.0
 
     z1_angle = angle_deg(z1_per_km)
     zapp_angle = angle_deg(zapp)
@@ -294,6 +336,34 @@ def calculate_single_ended_fault_location(
         warnings.append(
             "Sudut Zapp loop single-ended menyimpang dari sudut Z1. "
             "Ini indikasi pembanding single-ended lebih resistif atau data tidak ideal, bukan warning langsung dari metode double-ended."
+        )
+
+    if phase_current_depressed:
+        warnings.append(
+            "Arus fasa gangguan menurun dibanding pre-fault walaupun ada indikasi ground current. "
+            "Ini cocok dengan gangguan resistif pada saluran panjang dengan pengaruh load-flow; "
+            "loop single-ended konvensional dapat bias."
+        )
+
+    used_superimposed_fallback = False
+    conventional_out_of_range = recommended_distance_km < 0 or recommended_distance_km > line_length_km
+    if (
+        conventional_out_of_range
+        and superimposed_distance_x_km is not None
+        and 0 <= superimposed_distance_x_km <= line_length_km
+    ):
+        recommended_distance_km = superimposed_distance_x_km
+        recommended_distance_percent = recommended_distance_km / line_length_km * 100.0
+        rf_est_ohm, residual_z = estimate_fault_resistance(
+            zapp=zapp,
+            z1_per_km=z1_per_km,
+            distance_km=recommended_distance_km,
+        )
+        used_superimposed_fallback = True
+        effective_recommended_method = "superimposed_reactance"
+        warnings.append(
+            "Jarak konvensional keluar batas, sehingga aplikasi memakai fallback superimposed reactance "
+            "berbasis perubahan fasor pre-fault ke fault untuk case resistif/load-flow."
         )
 
     status = "VALID"
@@ -325,7 +395,16 @@ def calculate_single_ended_fault_location(
         "distance_mag_percent": distance_mag_km / line_length_km * 100.0,
         "distance_x_percent": distance_x_km / line_length_km * 100.0,
         "distance_projection_percent": distance_proj_km / line_length_km * 100.0,
-        "recommended_method": recommended_method,
+        "recommended_method": effective_recommended_method,
+        "used_superimposed_fallback": used_superimposed_fallback,
+        "superimposed_Zapp": superimposed_zapp,
+        "superimposed_Zapp_R": superimposed_zapp.real if superimposed_zapp is not None else None,
+        "superimposed_Zapp_X": superimposed_zapp.imag if superimposed_zapp is not None else None,
+        "superimposed_distance_x_km": superimposed_distance_x_km,
+        "superimposed_distance_projection_km": superimposed_distance_projection_km,
+        "superimposed_loop_current_mag": superimposed_loop_current_mag,
+        "phase_current_change_pct": phase_current_change_pct,
+        "phase_current_depressed": phase_current_depressed,
         "recommended_distance_km": recommended_distance_km,
         "recommended_distance_percent": recommended_distance_percent,
         "Rf_est_ohm": rf_est_ohm,
@@ -359,6 +438,14 @@ def build_single_ended_result_dataframe(result: dict):
         {"Parameter": "Distance by Reactance %", "Value": result["distance_x_percent"]},
         {"Parameter": "Distance by Projection %", "Value": result["distance_projection_percent"]},
         {"Parameter": "Recommended Method", "Value": result["recommended_method"]},
+        {"Parameter": "Used Superimposed Fallback", "Value": result["used_superimposed_fallback"]},
+        {"Parameter": "Superimposed Zapp R ohm", "Value": result["superimposed_Zapp_R"]},
+        {"Parameter": "Superimposed Zapp X ohm", "Value": result["superimposed_Zapp_X"]},
+        {"Parameter": "Superimposed Distance by Reactance km", "Value": result["superimposed_distance_x_km"]},
+        {"Parameter": "Superimposed Distance by Projection km", "Value": result["superimposed_distance_projection_km"]},
+        {"Parameter": "Superimposed Loop Current Magnitude", "Value": result["superimposed_loop_current_mag"]},
+        {"Parameter": "Fault Phase Current Change %", "Value": result["phase_current_change_pct"]},
+        {"Parameter": "Fault Phase Current Depressed", "Value": result["phase_current_depressed"]},
         {"Parameter": "Recommended Distance km", "Value": result["recommended_distance_km"]},
         {"Parameter": "Recommended Distance %", "Value": result["recommended_distance_percent"]},
         {"Parameter": "Estimated Fault Resistance ohm", "Value": result["Rf_est_ohm"]},

@@ -1,6 +1,7 @@
 from pathlib import Path
 import math
 import re
+from urllib.parse import quote
 import pandas as pd
 
 
@@ -672,4 +673,57 @@ def read_conductor_impedance_database(
 
     df = read_sheet_smart(path, sheet_name)
 
+    return df
+
+
+def extract_google_spreadsheet_id(url_or_id: str):
+    text = str(url_or_id or "").strip()
+
+    if not text:
+        raise ValueError("URL/ID Google Spreadsheet kosong.")
+
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", text)
+
+    if match:
+        return match.group(1)
+
+    if re.fullmatch(r"[a-zA-Z0-9-_]+", text):
+        return text
+
+    raise ValueError("URL Google Spreadsheet tidak valid.")
+
+
+def google_spreadsheet_csv_url(url_or_id: str, sheet_name: str):
+    spreadsheet_id = extract_google_spreadsheet_id(url_or_id)
+    sheet = quote(str(sheet_name or "").strip())
+
+    if not sheet:
+        raise ValueError("Nama sheet Google Spreadsheet kosong.")
+
+    return (
+        f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq"
+        f"?tqx=out:csv&sheet={sheet}"
+    )
+
+
+def google_spreadsheet_metadata_url(url_or_id: str):
+    spreadsheet_id = extract_google_spreadsheet_id(url_or_id)
+    return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:json"
+
+
+def get_google_spreadsheet_sheet_names(url_or_id: str):
+    metadata_url = google_spreadsheet_metadata_url(url_or_id)
+    import urllib.request
+
+    with urllib.request.urlopen(metadata_url, timeout=15) as response:
+        raw = response.read().decode("utf-8", errors="replace")
+
+    matches = re.findall(r'"name"\s*:\s*"([^"]+)"', raw)
+    return list(dict.fromkeys(matches))
+
+
+def read_google_spreadsheet_table(url_or_id: str, sheet_name: str):
+    csv_url = google_spreadsheet_csv_url(url_or_id, sheet_name)
+    df = pd.read_csv(csv_url)
+    df.columns = make_unique_columns(df.columns)
     return df

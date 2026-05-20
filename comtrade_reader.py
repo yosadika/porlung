@@ -1,4 +1,5 @@
 import re
+import tempfile
 import comtrade
 import pandas as pd
 
@@ -168,7 +169,7 @@ def read_comtrade(cfg_path: str, dat_path: str):
     - metadata: metadata record, channel, ratio, trigger
     """
 
-    record = comtrade.load(cfg_path, dat_path)
+    record, cfg_path_for_metadata = _load_comtrade_with_fallbacks(cfg_path, dat_path)
 
     time = record.time
     analog_channel_names_raw = list(record.analog_channel_ids)
@@ -195,8 +196,8 @@ def read_comtrade(cfg_path: str, dat_path: str):
 
         df[unique_label] = analog_values[index]
 
-    analog_meta = _parse_cfg_analog_metadata(cfg_path)
-    start_time_cfg, trigger_time_cfg = _parse_cfg_trigger_time(cfg_path)
+    analog_meta = _parse_cfg_analog_metadata(cfg_path_for_metadata)
+    start_time_cfg, trigger_time_cfg = _parse_cfg_trigger_time(cfg_path_for_metadata)
 
     vt_ratio_cfg, ct_ratio_cfg = _infer_ratio_from_channel_meta(analog_meta)
 
@@ -231,3 +232,225 @@ def read_comtrade(cfg_path: str, dat_path: str):
     }
 
     return df, metadata
+
+
+def _load_comtrade_with_fallbacks(cfg_path: str, dat_path: str):
+    attempts = [
+        (cfg_path, False, False, False),
+        (cfg_path, True, False, False),
+        (cfg_path, False, True, False),
+        (cfg_path, True, True, False),
+        (cfg_path, False, False, True),
+        (cfg_path, True, False, True),
+        (cfg_path, False, True, True),
+        (cfg_path, True, True, True),
+    ]
+    last_error = None
+
+    for source_cfg, simplify_station_line, normalize_timestamps, normalize_file_type in attempts:
+        try:
+            candidate_cfg = source_cfg
+
+            if simplify_station_line or normalize_timestamps or normalize_file_type:
+                candidate_cfg = _create_compatible_cfg_copy(
+                    source_cfg,
+                    dat_path=dat_path,
+                    simplify_station_line=simplify_station_line,
+                    normalize_timestamps=normalize_timestamps,
+                    normalize_file_type=normalize_file_type,
+                )
+
+            return comtrade.load(candidate_cfg, dat_path), candidate_cfg
+
+        except (ValueError, comtrade.ComtradeError) as error:
+            last_error = error
+            message = str(error)
+
+            if (
+                "too many values to unpack" not in message
+                and "month must be in 1..12" not in message
+                and "Not supported data file format" not in message
+            ):
+                raise
+
+    raise last_error
+
+
+def _create_compatible_cfg_copy(
+    cfg_path: str,
+    dat_path: str | None = None,
+    simplify_station_line: bool = False,
+    normalize_timestamps: bool = False,
+    normalize_file_type: bool = False,
+):
+    """
+    Beberapa export relay menulis baris pertama CFG lebih dari format yang
+    didukung library comtrade terpasang. Library tersebut mengharapkan dua
+    field: station_name, rec_dev_id. Ada juga file yang memakai tanggal
+    DD/MM/YYYY sementara library membaca MM/DD/YYYY. Fallback ini hanya
+    mengubah salinan sementara CFG; file asli user tidak diubah.
+    """
+
+    with open(cfg_path, "r", encoding="utf-8", errors="ignore") as source:
+        lines = source.readlines()
+
+    if not lines:
+        raise ValueError("File CFG kosong.")
+
+    if simplify_station_line:
+        first_line = lines[0].strip()
+        parts = [part.strip() for part in first_line.split(",")]
+
+        if len(parts) > 2:
+            station_name = parts[0] or "UNKNOWN_STATION"
+            rec_dev_id = parts[1] or "UNKNOWN_DEVICE"
+            lines[0] = f"{station_name},{rec_dev_id}\n"
+
+    if normalize_timestamps:
+        lines = [_normalize_cfg_timestamp_line(line) for line in lines]
+
+    if normalize_file_type:
+        lines = _normalize_cfg_file_type(lines, dat_path)
+
+    temp_cfg = tempfile.NamedTemporaryFile(delete=False, suffix=".cfg", mode="w", encoding="utf-8")
+
+    with temp_cfg:
+        temp_cfg.writelines(lines)
+
+    return temp_cfg.name
+
+
+def _normalize_cfg_file_type(lines: list[str], dat_path: str | None):
+    """
+    Beberapa CFG export relay menulis baris tipe DAT sebagai kosong, memakai
+    tambahan komentar setelah koma, atau memakai kapitalisasi/whitespace yang
+    membuat library gagal mengenali format. Normalisasi ini hanya berlaku pada
+    salinan sementara CFG.
+    """
+
+    file_type_index = _find_cfg_file_type_line_index(lines)
+
+    if file_type_index is None:
+        return lines
+
+    normalized_lines = list(lines)
+    current_line = normalized_lines[file_type_index] if file_type_index < len(normalized_lines) else ""
+    current_token = current_line.split(",", 1)[0].strip().upper()
+    aliases = {
+        "ASCII": "ASCII",
+        "A": "ASCII",
+        "BINARY": "BINARY",
+        "BINARY16": "BINARY",
+        "BIN": "BINARY",
+        "B": "BINARY",
+        "BINARY32": "BINARY32",
+        "B32": "BINARY32",
+        "FLOAT32": "FLOAT32",
+        "FLOAT": "FLOAT32",
+        "F32": "FLOAT32",
+    }
+    file_type = aliases.get(current_token)
+
+    if file_type is None:
+        file_type = _infer_dat_file_type(dat_path)
+
+    normalized_lines[file_type_index] = f"{file_type}\n"
+    return normalized_lines
+
+
+def _find_cfg_file_type_line_index(lines: list[str]):
+    if len(lines) < 8:
+        return None
+
+    try:
+        channel_parts = [part.strip().upper() for part in lines[1].split(",")]
+        analog_count = 0
+        digital_count = 0
+
+        for part in channel_parts:
+            if part.endswith("A"):
+                analog_count = int(part[:-1] or 0)
+            elif part.endswith("D"):
+                digital_count = int(part[:-1] or 0)
+
+        index = 2 + analog_count + digital_count
+
+        # Frequency line.
+        index += 1
+
+        if index >= len(lines):
+            return None
+
+        nrates_text = lines[index].split(",", 1)[0].strip()
+        nrates = int(float(nrates_text)) if nrates_text else 0
+        if nrates <= 0:
+            nrates = 1
+
+        # Nrates line, sample-rate lines, start timestamp, trigger timestamp.
+        index += 1 + nrates + 2
+
+        if 0 <= index < len(lines):
+            return index
+    except Exception:
+        return _find_cfg_file_type_line_index_by_heuristic(lines)
+
+    return None
+
+
+def _find_cfg_file_type_line_index_by_heuristic(lines: list[str]):
+    supported = {"ASCII", "BINARY", "BINARY16", "BINARY32", "FLOAT", "FLOAT32", "BIN", "B32", "F32"}
+
+    for index, line in enumerate(lines):
+        token = line.split(",", 1)[0].strip().upper()
+        if token in supported:
+            return index
+
+    return None
+
+
+def _infer_dat_file_type(dat_path: str | None):
+    if not dat_path:
+        return "ASCII"
+
+    try:
+        with open(dat_path, "rb") as dat_file:
+            sample = dat_file.read(512)
+
+        if not sample:
+            return "ASCII"
+
+        if b"\x00" in sample:
+            return "BINARY"
+
+        text = sample.decode("ascii", errors="strict")
+        first_line = text.splitlines()[0] if text.splitlines() else ""
+        comma_count = first_line.count(",")
+
+        if comma_count >= 2:
+            return "ASCII"
+    except Exception:
+        return "BINARY"
+
+    return "BINARY"
+
+
+def _normalize_cfg_timestamp_line(line: str):
+    """
+    Ubah timestamp DD/MM/YYYY,HH:MM:SS.xxxxxx menjadi MM/DD/YYYY,...
+    hanya jika komponen pertama > 12 dan komponen kedua valid sebagai bulan.
+    """
+
+    pattern = re.compile(r"^(\s*)(\d{1,2})/(\d{1,2})/(\d{4})(,.*)$")
+    match = pattern.match(line)
+
+    if not match:
+        return line
+
+    prefix, first, second, year, rest = match.groups()
+    first_int = int(first)
+    second_int = int(second)
+
+    if first_int > 12 and 1 <= second_int <= 12:
+        return f"{prefix}{second}/{first}/{year}{rest}"
+
+    return line

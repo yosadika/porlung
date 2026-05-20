@@ -79,6 +79,64 @@ def find_persistent_pickup(mask: np.ndarray, start_index: int, consecutive_sampl
     return None
 
 
+def find_dominant_event_onset(
+    score: np.ndarray,
+    start_index: int,
+    threshold: float,
+    samples_per_cycle: int,
+    consecutive_below: int | None = None,
+):
+    """
+    Cari event gangguan utama dari score terbesar, lalu backtrack ke awal
+    perubahan. Ini menghindari false pickup kecil di awal rekaman yang masih
+    termasuk pre-fault/noise.
+    """
+
+    score = np.asarray(score, dtype=float)
+    score = np.nan_to_num(score, nan=-np.inf, posinf=-np.inf, neginf=-np.inf)
+
+    if start_index >= len(score):
+        return None, None
+
+    search = score[start_index:]
+    if len(search) == 0 or not np.isfinite(np.nanmax(search)):
+        return None, None
+
+    peak_index = int(start_index + np.nanargmax(search))
+    peak_value = float(score[peak_index])
+
+    if peak_value <= threshold:
+        return None, peak_index
+
+    if consecutive_below is None:
+        consecutive_below = max(2, int(round(0.10 * samples_per_cycle)))
+
+    below_count = 0
+    onset_index = start_index
+
+    for index in range(peak_index, start_index - 1, -1):
+        if score[index] <= threshold:
+            below_count += 1
+
+            if below_count >= consecutive_below:
+                onset_index = min(peak_index, index + consecutive_below)
+                break
+        else:
+            below_count = 0
+    else:
+        # Jika threshold terlalu sensitif dan score tidak pernah benar-benar
+        # kembali di bawah baseline, jangan lompat ke awal rekaman. Ambil
+        # titik terdekat sebelum peak saat score mulai naik signifikan.
+        local_left = max(start_index, peak_index - 2 * samples_per_cycle)
+        local = score[local_left:peak_index + 1]
+        local_floor = float(np.nanmedian(local[:max(1, len(local) // 4)]))
+        local_threshold = local_floor + 0.10 * max(peak_value - local_floor, 0.0)
+        above = np.where(local >= local_threshold)[0]
+        onset_index = int(local_left + above[0]) if len(above) else local_left
+
+    return int(onset_index), peak_index
+
+
 def refine_fault_index_from_instantaneous_change(
     df: pd.DataFrame,
     candidate_index: int,
@@ -211,6 +269,7 @@ def detect_superimposed_fault_inception(
     samples_per_cycle: int,
     threshold_sigma: float = 8.0,
     consecutive_samples: int | None = None,
+    prefer_dominant_event: bool = True,
 ):
     energy = calculate_superimposed_energy(df, samples_per_cycle)
     total_energy = energy["total_energy"]
@@ -222,17 +281,31 @@ def detect_superimposed_fault_inception(
     baseline_median = float(np.nanmedian(baseline))
     baseline_sigma = robust_sigma(baseline)
     threshold = baseline_median + threshold_sigma * baseline_sigma
+    if len(baseline) > 0:
+        threshold = max(
+            threshold,
+            float(np.nanpercentile(baseline, 99.0)) * 2.0,
+        )
 
     if consecutive_samples is None:
         consecutive_samples = max(2, int(round(0.05 * samples_per_cycle)))
 
-    pickup_mask = total_energy > threshold
-
-    candidate_index = find_persistent_pickup(
-        pickup_mask,
-        start_index=prefault_samples,
-        consecutive_samples=consecutive_samples,
-    )
+    if prefer_dominant_event:
+        candidate_index, peak_index = find_dominant_event_onset(
+            total_energy,
+            start_index=prefault_samples,
+            threshold=threshold,
+            samples_per_cycle=samples_per_cycle,
+            consecutive_below=consecutive_samples,
+        )
+    else:
+        pickup_mask = total_energy > threshold
+        candidate_index = find_persistent_pickup(
+            pickup_mask,
+            start_index=prefault_samples,
+            consecutive_samples=consecutive_samples,
+        )
+        peak_index = None
 
     if candidate_index is None:
         return {
@@ -244,18 +317,21 @@ def detect_superimposed_fault_inception(
             "consecutive_samples": consecutive_samples,
         }
 
-    local_left = max(prefault_samples, candidate_index - consecutive_samples)
-    local_right = min(
-        len(total_energy),
-        candidate_index + max(consecutive_samples, int(round(0.25 * samples_per_cycle))),
-    )
-
-    if local_left < local_right:
-        local_index = int(
-            local_left + np.argmax(total_energy[local_left:local_right])
+    if peak_index is None:
+        local_left = max(prefault_samples, candidate_index - consecutive_samples)
+        local_right = min(
+            len(total_energy),
+            candidate_index + max(consecutive_samples, int(round(0.25 * samples_per_cycle))),
         )
+
+        if local_left < local_right:
+            local_index = int(
+                local_left + np.argmax(total_energy[local_left:local_right])
+            )
+        else:
+            local_index = candidate_index
     else:
-        local_index = candidate_index
+        local_index = int(peak_index)
 
     return {
         "detected": True,
@@ -267,6 +343,7 @@ def detect_superimposed_fault_inception(
         "baseline_sigma": baseline_sigma,
         "consecutive_samples": consecutive_samples,
         "peak_energy": float(total_energy[local_index]),
+        "prefer_dominant_event": prefer_dominant_event,
     }
 
 
@@ -377,6 +454,21 @@ def detect_fault_inception(
         consecutive_samples=consecutive_samples,
     )
 
+    dominant_rms_index = None
+    dominant_rms_peak_index = None
+
+    if adaptive_threshold_sigma is not None and disturbance_score is not None:
+        dominant_rms_index, dominant_rms_peak_index = find_dominant_event_onset(
+            disturbance_score,
+            start_index=prefault_samples,
+            threshold=adaptive_threshold_sigma,
+            samples_per_cycle=samples_per_cycle,
+            consecutive_below=max(2, consecutive_samples),
+        )
+
+        if dominant_rms_index is not None:
+            rms_fault_index = dominant_rms_index
+
     superimposed_result = None
 
     if method == "hybrid_superimposed":
@@ -386,19 +478,33 @@ def detect_fault_inception(
             samples_per_cycle=samples_per_cycle,
             threshold_sigma=superimposed_threshold_sigma,
             consecutive_samples=None,
+            prefer_dominant_event=True,
         )
 
         if superimposed_result["detected"]:
             if rms_fault_index is None:
                 rms_fault_index = superimposed_result["fault_index"]
             else:
-                max_early_shift = max(2, samples_per_cycle)
+                max_early_shift = max(2, 2 * samples_per_cycle)
 
                 if (
-                    superimposed_result["fault_index"] <= rms_fault_index
-                    and rms_fault_index - superimposed_result["fault_index"] <= max_early_shift
+                    abs(superimposed_result["fault_index"] - rms_fault_index)
+                    <= max_early_shift
                 ):
-                    rms_fault_index = superimposed_result["fault_index"]
+                    rms_fault_index = min(
+                        rms_fault_index,
+                        superimposed_result["fault_index"],
+                    )
+                elif dominant_rms_peak_index is not None:
+                    rms_peak_distance = abs(
+                        int(superimposed_result.get("peak_index", superimposed_result["fault_index"]))
+                        - int(dominant_rms_peak_index)
+                    )
+                    if rms_peak_distance <= max(2, 3 * samples_per_cycle):
+                        rms_fault_index = min(
+                            rms_fault_index,
+                            superimposed_result["fault_index"],
+                        )
 
     if rms_fault_index is None:
         result = {
@@ -469,6 +575,8 @@ def detect_fault_inception(
         "consecutive_samples": consecutive_samples,
         "refine_fault_bar": refine_fault_bar,
         "method": method,
+        "dominant_rms_index": dominant_rms_index,
+        "dominant_rms_peak_index": dominant_rms_peak_index,
         "confidence_score": round(confidence_score, 2),
         "current_rms_max": current_rms_max,
         "voltage_rms_min": voltage_rms_min,
