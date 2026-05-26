@@ -4,11 +4,15 @@ import os
 import math
 import cmath
 import re
+import json
+import io
+import zipfile
 from datetime import datetime
 from urllib.parse import quote
 import folium
 import numpy as np
 import pandas as pd
+import requests
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -80,6 +84,8 @@ DEFAULT_TOWER_SCHEDULE_URL = (
     "<TOWER_SCHEDULE_SPREADSHEET_ID>/edit?usp=sharing"
 )
 DEFAULT_TOWER_SCHEDULE_SHEET = "tower_schedule"
+DEFAULT_CASE_DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/<CASE_DRIVE_FOLDER_ID>?usp=sharing"
+DEFAULT_CASE_DRIVE_FOLDER_ID = "<CASE_DRIVE_FOLDER_ID>"
 
 
 @st.cache_data(show_spinner="Membaca file COMTRADE...")
@@ -126,6 +132,215 @@ def read_google_spreadsheet_query_cached(url_or_id: str, sheet_name: str, query:
 @st.cache_data(ttl=1800, show_spinner="Membaca daftar sheet...")
 def get_google_spreadsheet_sheet_names_cached(url_or_id: str):
     return get_google_spreadsheet_sheet_names(url_or_id)
+
+
+class RestoredUpload:
+    def __init__(self, name: str, content: bytes):
+        self.name = name
+        self._content = content
+        self.size = len(content)
+
+    def getvalue(self):
+        return self._content
+
+
+CASE_FILE_KEYS = {
+    "local_cfg": ("case_local_cfg_name", "case_local_cfg_bytes", "local.cfg"),
+    "local_dat": ("case_local_dat_name", "case_local_dat_bytes", "local.dat"),
+    "remote_cfg": ("case_remote_cfg_name", "case_remote_cfg_bytes", "remote.cfg"),
+    "remote_dat": ("case_remote_dat_name", "case_remote_dat_bytes", "remote.dat"),
+}
+
+CASE_STATE_EXCLUDE_PREFIXES = (
+    "local_cfg_file",
+    "local_dat_file",
+    "remote_cfg_file",
+    "remote_dat_file",
+)
+CASE_STATE_EXCLUDE_KEYS = {
+    "case_archive_file",
+    "case_local_cfg_bytes",
+    "case_local_dat_bytes",
+    "case_remote_cfg_bytes",
+    "case_remote_dat_bytes",
+}
+
+
+def extract_google_drive_folder_id(url_or_id: str):
+    text = str(url_or_id or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"/folders/([A-Za-z0-9_-]+)", text)
+    if match:
+        return match.group(1)
+    return text
+
+
+def make_case_json_safe(value):
+    if isinstance(value, pd.DataFrame):
+        return {
+            "__type__": "dataframe",
+            "columns": [str(col) for col in value.columns],
+            "records": make_case_json_safe(value.to_dict("records")),
+        }
+    if isinstance(value, pd.Series):
+        return make_case_json_safe(value.to_dict())
+    if isinstance(value, np.ndarray):
+        return make_case_json_safe(value.tolist())
+    if isinstance(value, complex):
+        return {"__type__": "complex", "real": value.real, "imag": value.imag}
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return None if pd.isna(value) else float(value)
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    if isinstance(value, (datetime,)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): make_case_json_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [make_case_json_safe(item) for item in value]
+    if isinstance(value, bytes):
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def restore_case_json_value(value):
+    if isinstance(value, dict) and value.get("__type__") == "dataframe":
+        return pd.DataFrame(value.get("records", []), columns=value.get("columns"))
+    if isinstance(value, dict) and value.get("__type__") == "complex":
+        return complex(value.get("real", 0.0), value.get("imag", 0.0))
+    if isinstance(value, dict):
+        return {key: restore_case_json_value(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [restore_case_json_value(item) for item in value]
+    return value
+
+
+def build_case_state_snapshot():
+    snapshot = {}
+    for key, value in st.session_state.items():
+        if key in CASE_STATE_EXCLUDE_KEYS:
+            continue
+        if any(str(key).startswith(prefix) for prefix in CASE_STATE_EXCLUDE_PREFIXES):
+            continue
+        snapshot[str(key)] = make_case_json_safe(value)
+    return snapshot
+
+
+def build_case_archive_bytes(case_name: str = ""):
+    created_at = datetime.now().isoformat(timespec="seconds")
+    case_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(case_name or "").strip()).strip("_")
+    if not case_slug:
+        line_name = st.session_state.get("line_param", {}).get("line_name", "case")
+        case_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(line_name or "case")).strip("_") or "case"
+    manifest = {
+        "schema": "transmission_fault_locator_case_v1",
+        "created_at": created_at,
+        "case_name": case_slug,
+        "drive_folder_id": st.session_state.get("case_drive_folder_id", DEFAULT_CASE_DRIVE_FOLDER_ID),
+        "files": {},
+    }
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for logical_name, (name_key, bytes_key, fallback_name) in CASE_FILE_KEYS.items():
+            content = st.session_state.get(bytes_key)
+            if content:
+                filename = st.session_state.get(name_key, fallback_name)
+                archive_path = f"records/{logical_name}/{filename}"
+                archive.writestr(archive_path, content)
+                manifest["files"][logical_name] = {
+                    "name": filename,
+                    "path": archive_path,
+                    "size": len(content),
+                }
+        archive.writestr("case_state.json", json.dumps(build_case_state_snapshot(), indent=2, ensure_ascii=False))
+        archive.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+    archive_buffer.seek(0)
+    filename = f"{case_slug}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    return filename, archive_buffer.getvalue()
+
+
+def restore_case_archive(archive_bytes: bytes):
+    with zipfile.ZipFile(io.BytesIO(archive_bytes), "r") as archive:
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        state = json.loads(archive.read("case_state.json").decode("utf-8"))
+        for key, value in state.items():
+            st.session_state[key] = restore_case_json_value(value)
+        for logical_name, (name_key, bytes_key, fallback_name) in CASE_FILE_KEYS.items():
+            file_info = manifest.get("files", {}).get(logical_name)
+            if file_info and file_info.get("path") in archive.namelist():
+                st.session_state[name_key] = file_info.get("name", fallback_name)
+                st.session_state[bytes_key] = archive.read(file_info["path"])
+    st.session_state["case_restore_message"] = "Case berhasil dimuat. Aplikasi memakai file dan parameter dari arsip case."
+
+
+def get_restored_upload(logical_name: str):
+    name_key, bytes_key, _ = CASE_FILE_KEYS[logical_name]
+    content = st.session_state.get(bytes_key)
+    if not content:
+        return None
+    return RestoredUpload(st.session_state.get(name_key, f"{logical_name}.dat"), content)
+
+
+def get_google_drive_service():
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+    except ImportError as exc:
+        raise RuntimeError(
+            "Dependency Google Drive belum terpasang. Jalankan pip install -r requirements.txt."
+        ) from exc
+
+    scopes = ["https://www.googleapis.com/auth/drive.file"]
+    credentials_info = None
+    try:
+        credentials_info = st.secrets.get("gdrive_service_account")
+    except Exception:
+        credentials_info = None
+
+    credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if credentials_info:
+        credentials = service_account.Credentials.from_service_account_info(
+            dict(credentials_info),
+            scopes=scopes,
+        )
+    elif credentials_path:
+        credentials = service_account.Credentials.from_service_account_file(
+            credentials_path,
+            scopes=scopes,
+        )
+    else:
+        raise RuntimeError(
+            "Kredensial Google Drive belum tersedia. Gunakan st.secrets['gdrive_service_account'] "
+            "atau env GOOGLE_APPLICATION_CREDENTIALS, lalu share folder Drive ke email service account."
+        )
+    return build("drive", "v3", credentials=credentials, cache_discovery=False)
+
+
+def upload_case_archive_to_drive(filename: str, archive_bytes: bytes, folder_id: str):
+    try:
+        from googleapiclient.http import MediaIoBaseUpload
+    except ImportError as exc:
+        raise RuntimeError(
+            "Dependency Google Drive belum terpasang. Jalankan pip install -r requirements.txt."
+        ) from exc
+    service = get_google_drive_service()
+    media = MediaIoBaseUpload(io.BytesIO(archive_bytes), mimetype="application/zip", resumable=False)
+    metadata = {
+        "name": filename,
+        "parents": [folder_id],
+        "mimeType": "application/zip",
+    }
+    return service.files().create(body=metadata, media_body=media, fields="id,name,webViewLink").execute()
 
 
 def downsample_xy(x_values, y_values, max_points: int = MAX_PLOT_POINTS):
@@ -2304,6 +2519,485 @@ def google_maps_action_links(lat, lon, label="Location"):
     )
 
 
+def fault_label_anchor_from_segment(fault_segment):
+    if not fault_segment:
+        return (-16, 12), "left"
+    prev_lat = float(fault_segment["prev"]["lat"])
+    prev_lon = float(fault_segment["prev"]["lon"])
+    next_lat = float(fault_segment["next"]["lat"])
+    next_lon = float(fault_segment["next"]["lon"])
+    dx = next_lon - prev_lon
+    dy = next_lat - prev_lat
+
+    # Tempatkan label pada sisi yang paling menjauh dari arah garis span supaya
+    # tidak menumpuk dengan label nomor tower yang mengikuti jalur.
+    if abs(dx) >= abs(dy):
+        if dy >= 0:
+            return (-18, 76), "below"
+        return (-18, -16), "above"
+    if dx >= 0:
+        return (226, 20), "left"
+    return (-18, 20), "right"
+
+
+WMO_WEATHER_CODES = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Depositing rime fog",
+    51: "Light drizzle",
+    53: "Moderate drizzle",
+    55: "Dense drizzle",
+    56: "Light freezing drizzle",
+    57: "Dense freezing drizzle",
+    61: "Slight rain",
+    63: "Moderate rain",
+    65: "Heavy rain",
+    66: "Light freezing rain",
+    67: "Heavy freezing rain",
+    71: "Slight snow fall",
+    73: "Moderate snow fall",
+    75: "Heavy snow fall",
+    77: "Snow grains",
+    80: "Slight rain showers",
+    81: "Moderate rain showers",
+    82: "Violent rain showers",
+    85: "Slight snow showers",
+    86: "Heavy snow showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm with slight hail",
+    99: "Thunderstorm with heavy hail",
+}
+THUNDERSTORM_WEATHER_CODES = {95, 96, 99}
+
+
+def weather_code_label(code):
+    if code is None or pd.isna(code):
+        return "-"
+    try:
+        return WMO_WEATHER_CODES.get(int(code), f"WMO {int(code)}")
+    except (TypeError, ValueError):
+        return "-"
+
+
+def safe_number_formatter(decimals=2):
+    def _formatter(value):
+        if value is None or pd.isna(value):
+            return "-"
+        try:
+            return f"{float(value):.{decimals}f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    return _formatter
+
+
+def safe_display_number(value, decimals=1, suffix=""):
+    if value is None:
+        return "-"
+    try:
+        if pd.isna(value):
+            return "-"
+    except (TypeError, ValueError):
+        pass
+    try:
+        return f"{float(value):.{decimals}f}{suffix}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def weather_icon_for_code(code):
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        return "?"
+    if code in THUNDERSTORM_WEATHER_CODES:
+        return "!!"
+    if code in {61, 63, 65, 66, 67, 80, 81, 82}:
+        return "//"
+    if code in {51, 53, 55, 56, 57}:
+        return ".."
+    if code in {45, 48}:
+        return "~~"
+    if code in {2, 3}:
+        return "CL"
+    if code in {0, 1}:
+        return "SUN"
+    return "WX"
+
+
+def weather_card_html(weather_rows):
+    cards_html = []
+    for row in weather_rows:
+        thunder_text = row.get("Last Thunderstorm Indication", "-")
+        storm_class = "weather-storm-muted"
+        if row.get("Last Thunderstorm Time"):
+            thunder_text = f"{row.get('Last Thunderstorm Time')} | {row.get('Last Thunderstorm Weather', '-')}"
+            storm_class = "weather-storm-active"
+        cards_html.append(
+            f"""
+            <div class="weather-card">
+                <div class="weather-card-top">
+                    <div>
+                        <div class="weather-role">{row.get('Location', '-')}</div>
+                        <div class="weather-tower">{row.get('Tower', '-')}</div>
+                    </div>
+                    <div class="weather-icon">{weather_icon_for_code(row.get('Weather Code'))}</div>
+                </div>
+                <div class="weather-main">
+                    <div>
+                        <div class="weather-temp">{safe_display_number(row.get('Temperature C'), 1, ' C')}</div>
+                        <div class="weather-desc">{row.get('Current Weather', '-')}</div>
+                    </div>
+                    <div class="weather-distance">
+                        <span>{safe_display_number(row.get('Distance from Fault km'), 3, ' km')}</span>
+                        <small>dari fault</small>
+                    </div>
+                </div>
+                <div class="weather-grid">
+                    <div><span>Rain</span><strong>{safe_display_number(row.get('Rain mm'), 2, ' mm')}</strong></div>
+                    <div><span>Humidity</span><strong>{safe_display_number(row.get('Humidity %'), 0, '%')}</strong></div>
+                    <div><span>Cloud</span><strong>{safe_display_number(row.get('Cloud Cover %'), 0, '%')}</strong></div>
+                    <div><span>Wind</span><strong>{safe_display_number(row.get('Wind km/h'), 1, ' km/h')}</strong></div>
+                </div>
+                <div class="weather-storm {storm_class}">
+                    <span>Indikasi thunderstorm</span>
+                    <strong>{thunder_text}</strong>
+                </div>
+                <div class="weather-meta">
+                    <span>Kumulatif {safe_display_number(row.get('Cumulative km'), 3, ' km')}</span>
+                    <span>{safe_display_number(row.get('Latitude'), 6)}, {safe_display_number(row.get('Longitude'), 6)}</span>
+                </div>
+                <div class="weather-time">Update cuaca: {row.get('Weather Time') or '-'}</div>
+            </div>
+            """
+        )
+    return (
+        """
+        <style>
+        .weather-card-wrap {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 14px;
+            margin: 12px 0 14px 0;
+        }
+        .weather-card {
+            border: 1px solid rgba(148, 163, 184, 0.45);
+            border-radius: 8px;
+            padding: 16px;
+            background: linear-gradient(135deg, #f8fafc 0%, #eef6ff 100%);
+            box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+            color: #0f172a;
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+        .weather-card-top,
+        .weather-main,
+        .weather-meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: flex-start;
+        }
+        .weather-role {
+            color: #ef4444;
+            font-size: 13px;
+            font-weight: 700;
+            margin-bottom: 3px;
+        }
+        .weather-tower {
+            font-size: 14px;
+            font-weight: 700;
+            line-height: 1.25;
+        }
+        .weather-icon {
+            min-width: 54px;
+            height: 54px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            background: #0f172a;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 800;
+            letter-spacing: 0;
+        }
+        .weather-main {
+            margin-top: 14px;
+            align-items: center;
+        }
+        .weather-temp {
+            font-size: 34px;
+            line-height: 1;
+            font-weight: 700;
+        }
+        .weather-desc {
+            color: #475569;
+            margin-top: 4px;
+        }
+        .weather-distance {
+            text-align: right;
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(203, 213, 225, 0.8);
+        }
+        .weather-distance span {
+            display: block;
+            font-size: 18px;
+            font-weight: 700;
+        }
+        .weather-distance small {
+            color: #64748b;
+        }
+        .weather-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px;
+            margin-top: 14px;
+        }
+        .weather-grid div {
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(203, 213, 225, 0.75);
+            border-radius: 8px;
+            padding: 8px;
+        }
+        .weather-grid span,
+        .weather-storm span {
+            display: block;
+            color: #64748b;
+            font-size: 12px;
+            margin-bottom: 2px;
+        }
+        .weather-grid strong,
+        .weather-storm strong {
+            font-size: 14px;
+        }
+        .weather-storm {
+            margin-top: 12px;
+            border-radius: 8px;
+            padding: 10px;
+            border: 1px solid rgba(203, 213, 225, 0.8);
+            background: rgba(255, 255, 255, 0.72);
+        }
+        .weather-storm-active {
+            border-color: rgba(234, 88, 12, 0.55);
+            background: rgba(255, 237, 213, 0.9);
+        }
+        .weather-storm-muted strong {
+            color: #475569;
+        }
+        .weather-meta,
+        .weather-time {
+            color: #64748b;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+        @media print {
+            .weather-card-wrap {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .weather-card {
+                box-shadow: none;
+            }
+        }
+        </style>
+        <div class="weather-card-wrap">
+        """
+        + "".join(cards_html)
+        + "</div>"
+    )
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_open_meteo_current_weather(lat: float, lon: float):
+    try:
+        response = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "current": ",".join(
+                    [
+                        "temperature_2m",
+                        "relative_humidity_2m",
+                        "precipitation",
+                        "rain",
+                        "weather_code",
+                        "cloud_cover",
+                        "wind_speed_10m",
+                        "wind_direction_10m",
+                    ]
+                ),
+                "timezone": "Asia/Jakarta",
+                "forecast_days": 1,
+            },
+            timeout=8,
+        )
+        response.raise_for_status()
+        current = response.json().get("current", {})
+        code = current.get("weather_code")
+        return {
+            "time": current.get("time"),
+            "weather_code": code,
+            "weather": weather_code_label(code),
+            "temperature_c": current.get("temperature_2m"),
+            "humidity_pct": current.get("relative_humidity_2m"),
+            "precipitation_mm": current.get("precipitation"),
+            "rain_mm": current.get("rain"),
+            "cloud_cover_pct": current.get("cloud_cover"),
+            "wind_speed_kmh": current.get("wind_speed_10m"),
+            "wind_direction_deg": current.get("wind_direction_10m"),
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_open_meteo_recent_thunderstorm(lat: float, lon: float, past_days: int = 7):
+    try:
+        response = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "hourly": "weather_code,precipitation",
+                "past_days": int(past_days),
+                "forecast_days": 1,
+                "timezone": "Asia/Jakarta",
+            },
+            timeout=8,
+        )
+        response.raise_for_status()
+        hourly = response.json().get("hourly", {})
+        times = hourly.get("time", [])
+        codes = hourly.get("weather_code", [])
+        precipitation = hourly.get("precipitation", [])
+        for idx in range(min(len(times), len(codes)) - 1, -1, -1):
+            try:
+                code = int(codes[idx])
+            except (TypeError, ValueError):
+                continue
+            if code in THUNDERSTORM_WEATHER_CODES:
+                rain_value = precipitation[idx] if idx < len(precipitation) else None
+                return {
+                    "time": times[idx],
+                    "weather_code": code,
+                    "weather": weather_code_label(code),
+                    "precipitation_mm": rain_value,
+                }
+        return {"time": None, "weather": f"Tidak ada indikasi thunderstorm {past_days} hari terakhir"}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def get_selected_fault_location_option(key_prefix: str = "summary_tower_fault"):
+    fault_options = get_fault_location_map_options()
+    if not fault_options:
+        return None
+    option_keys = [option["key"] for option in fault_options]
+    default_key = "de" if "de" in option_keys else option_keys[0]
+    selected_key = st.session_state.get(f"{key_prefix}_fault_source", default_key)
+    if selected_key not in option_keys:
+        selected_key = default_key
+    return next(option for option in fault_options if option["key"] == selected_key)
+
+
+def get_fault_adjacent_tower_rows(map_df: pd.DataFrame, distance_km: float):
+    if map_df.empty or "_cum_km" not in map_df.columns:
+        return []
+    segment = get_fault_tower_segment(map_df, distance_km)
+    if segment:
+        return [
+            ("Tower A", segment["prev"]),
+            ("Tower B", segment["next"]),
+        ]
+    path_df = map_df.dropna(subset=["lat", "lon", "_cum_km"]).copy()
+    if path_df.empty:
+        return []
+    path_df["_fault_abs_km"] = (path_df["_cum_km"].astype(float) - float(distance_km)).abs()
+    return [
+        (f"Tower terdekat {idx + 1}", row)
+        for idx, (_, row) in enumerate(path_df.sort_values("_fault_abs_km").head(2).iterrows())
+    ]
+
+
+def render_fault_weather_lightning_summary(tower_df: pd.DataFrame, key_prefix: str = "summary_weather_lightning"):
+    map_df = prepare_tower_map_dataframe(tower_df)
+    selected_fault_option = get_selected_fault_location_option("summary_tower_fault")
+    if map_df.empty or not selected_fault_option:
+        return
+
+    adjacent_rows = get_fault_adjacent_tower_rows(map_df, selected_fault_option["distance_km"])
+    if not adjacent_rows:
+        st.info("Data tower terdekat belum cukup untuk mengambil cuaca sekitar titik gangguan.")
+        return
+
+    st.markdown("### Cuaca Terkini & Indikasi Petir")
+    st.caption(
+        "Data cuaca diambil pada dua tower pengapit/terdekat titik gangguan. "
+        "Histori petir di bawah adalah indikasi thunderstorm dari weather code, bukan data sambaran petir aktual."
+    )
+
+    weather_rows = []
+    for role, tower_row in adjacent_rows:
+        lat = float(tower_row["lat"])
+        lon = float(tower_row["lon"])
+        current = fetch_open_meteo_current_weather(lat, lon)
+        thunderstorm = fetch_open_meteo_recent_thunderstorm(lat, lon, past_days=7)
+        if current.get("error"):
+            current_summary = f"Gagal baca cuaca: {current['error']}"
+        else:
+            current_summary = current.get("weather", "-")
+        if thunderstorm.get("error"):
+            storm_summary = f"Gagal baca indikasi: {thunderstorm['error']}"
+            storm_time = None
+            storm_weather = storm_summary
+        elif thunderstorm.get("time"):
+            storm_time = thunderstorm.get("time")
+            storm_weather = thunderstorm.get("weather", "-")
+            storm_summary = (
+                f"{storm_time} | {storm_weather}"
+            )
+        else:
+            storm_time = None
+            storm_weather = thunderstorm.get("weather", "-")
+            storm_summary = thunderstorm.get("weather", "-")
+
+        weather_rows.append(
+            {
+                "Location": role,
+                "Tower": tower_row.get("SPAN", "-"),
+                "Distance from Fault km": float(tower_row.get("_cum_km", 0.0)) - float(selected_fault_option["distance_km"]),
+                "Cumulative km": tower_row.get("_cum_km"),
+                "Latitude": lat,
+                "Longitude": lon,
+                "Current Weather": current_summary,
+                "Weather Code": current.get("weather_code"),
+                "Temperature C": current.get("temperature_c"),
+                "Humidity %": current.get("humidity_pct"),
+                "Rain mm": current.get("rain_mm"),
+                "Precipitation mm": current.get("precipitation_mm"),
+                "Cloud Cover %": current.get("cloud_cover_pct"),
+                "Wind km/h": current.get("wind_speed_kmh"),
+                "Wind Dir deg": current.get("wind_direction_deg"),
+                "Weather Time": current.get("time"),
+                "Last Thunderstorm Indication": storm_summary,
+                "Last Thunderstorm Time": storm_time,
+                "Last Thunderstorm Weather": storm_weather,
+            }
+        )
+
+    st.markdown(weather_card_html(weather_rows), unsafe_allow_html=True)
+    st.info(
+        "Untuk histori sambaran petir aktual, aplikasi perlu integrasi provider lightning "
+        "seperti API jaringan deteksi petir. Tanpa provider tersebut, aplikasi hanya menampilkan "
+        "indikasi cuaca thunderstorm di sekitar dua tower terdekat."
+    )
+
+
 def prepare_tower_map_dataframe(tower_df: pd.DataFrame):
     if tower_df is None or tower_df.empty or "LATITUDE" not in tower_df.columns or "LONGITUDE" not in tower_df.columns:
         return pd.DataFrame()
@@ -2729,8 +3423,16 @@ def render_tower_map(
                 tooltip=folium.Tooltip(f"Exact Fault Point - {selected_fault_option['label']}", sticky=True),
                 popup=folium.Popup(fault_popup, max_width=560),
             ).add_to(fault_group)
+            fault_label_anchor, fault_label_direction = fault_label_anchor_from_segment(fault_segment)
+            pointer_style = {
+                "left": "left:-10px;top:18px;border-top:7px solid transparent;border-bottom:7px solid transparent;border-right:10px solid #dc2626;",
+                "right": "right:-10px;top:18px;border-top:7px solid transparent;border-bottom:7px solid transparent;border-left:10px solid #dc2626;",
+                "above": "left:18px;bottom:-10px;border-left:7px solid transparent;border-right:7px solid transparent;border-top:10px solid #dc2626;",
+                "below": "left:18px;top:-10px;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:10px solid #dc2626;",
+            }.get(fault_label_direction, "")
             fault_label_html = (
                 "<div style='"
+                "position:relative;"
                 "background:rgba(255,255,255,0.92);"
                 "border:1px solid #dc2626;"
                 "border-radius:6px;"
@@ -2749,13 +3451,14 @@ def render_tower_map(
                     if fault_segment
                     else ""
                 )
+                + f"<div style='position:absolute;width:0;height:0;{pointer_style}'></div>"
                 + "</div>"
             )
             folium.Marker(
                 location=[fault_lat, fault_lon],
                 icon=folium.DivIcon(
                     icon_size=(210, 70),
-                    icon_anchor=(-16, 12),
+                    icon_anchor=fault_label_anchor,
                     html=fault_label_html,
                 ),
             ).add_to(fault_group)
@@ -2763,7 +3466,6 @@ def render_tower_map(
         if fault_warning:
             st.warning(fault_warning)
 
-    folium.LayerControl(collapsed=False).add_to(tower_map)
     folium_center_override = None
     folium_zoom_override = None
     if focus_on_fault and fault_location and selected_fault_option:
@@ -3009,6 +3711,25 @@ st.sidebar.caption("Opsional. Diisi jika ingin menghitung double-ended.")
 remote_cfg_file = st.sidebar.file_uploader("Remote .cfg", key="remote_cfg_file")
 remote_dat_file = st.sidebar.file_uploader("Remote .dat", key="remote_dat_file")
 
+st.sidebar.divider()
+st.sidebar.header("Case Storage")
+case_archive_file = st.sidebar.file_uploader("Load Case (.zip)", type=["zip"], key="case_archive_file")
+if case_archive_file is not None:
+    try:
+        restore_case_archive(case_archive_file.getvalue())
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error("Case gagal dimuat.")
+        st.sidebar.exception(e)
+
+cfg_file = cfg_file or get_restored_upload("local_cfg")
+dat_file = dat_file or get_restored_upload("local_dat")
+remote_cfg_file = remote_cfg_file or get_restored_upload("remote_cfg")
+remote_dat_file = remote_dat_file or get_restored_upload("remote_dat")
+
+if st.session_state.get("case_restore_message"):
+    st.sidebar.success(st.session_state.pop("case_restore_message"))
+
 if not validate_uploaded_extension(cfg_file, ".cfg", "File local CFG"):
     st.stop()
 
@@ -3044,6 +3765,10 @@ if cfg_file is None or dat_file is None:
 
 local_cfg_bytes = cfg_file.getvalue()
 local_dat_bytes = dat_file.getvalue()
+st.session_state["case_local_cfg_name"] = cfg_file.name
+st.session_state["case_local_cfg_bytes"] = local_cfg_bytes
+st.session_state["case_local_dat_name"] = dat_file.name
+st.session_state["case_local_dat_bytes"] = local_dat_bytes
 
 try:
     df, metadata = read_comtrade_cached(
@@ -3130,9 +3855,15 @@ with tab_remote:
         dat_ok = validate_uploaded_extension(remote_dat_file, ".dat", "File remote DAT")
         if cfg_ok and dat_ok:
             try:
+                remote_cfg_bytes = remote_cfg_file.getvalue()
+                remote_dat_bytes = remote_dat_file.getvalue()
+                st.session_state["case_remote_cfg_name"] = remote_cfg_file.name
+                st.session_state["case_remote_cfg_bytes"] = remote_cfg_bytes
+                st.session_state["case_remote_dat_name"] = remote_dat_file.name
+                st.session_state["case_remote_dat_bytes"] = remote_dat_bytes
                 remote_df, remote_metadata = read_comtrade_cached(
-                    remote_cfg_file.getvalue(),
-                    remote_dat_file.getvalue(),
+                    remote_cfg_bytes,
+                    remote_dat_bytes,
                     remote_cfg_file.name,
                     remote_dat_file.name,
                 )
@@ -4319,6 +5050,64 @@ with tab0:
     st.session_state["tower_schedule_url"] = tower_schedule_url_setup or DEFAULT_TOWER_SCHEDULE_URL
     st.session_state["tower_schedule_sheet_name"] = tower_schedule_sheet_setup or DEFAULT_TOWER_SCHEDULE_SHEET
 
+    st.markdown("### Case Storage")
+    st.caption(
+        "Simpan rekaman COMTRADE, parameter yang sudah diubah, dan hasil kalkulasi sebagai satu arsip case. "
+        "Arsip ini bisa di-load kembali dari sidebar tanpa mengatur ulang workflow dari awal."
+    )
+    case_col1, case_col2 = st.columns([2, 3])
+    with case_col1:
+        case_name_input = st.text_input(
+            "Case Name",
+            value=st.session_state.get("case_name", st.session_state.get("line_param", {}).get("line_name", "fault_case")),
+            key="case_name_input",
+        ).strip()
+        st.session_state["case_name"] = case_name_input or "fault_case"
+    with case_col2:
+        drive_folder_input = st.text_input(
+            "Google Drive Folder URL / ID",
+            value=st.session_state.get("case_drive_folder_url", DEFAULT_CASE_DRIVE_FOLDER_URL),
+            key="case_drive_folder_url_input",
+        ).strip()
+        st.session_state["case_drive_folder_url"] = drive_folder_input or DEFAULT_CASE_DRIVE_FOLDER_URL
+        st.session_state["case_drive_folder_id"] = extract_google_drive_folder_id(st.session_state["case_drive_folder_url"])
+
+    case_filename, case_archive_bytes = build_case_archive_bytes(st.session_state.get("case_name", "fault_case"))
+    storage_col1, storage_col2 = st.columns([1, 1])
+    with storage_col1:
+        st.download_button(
+            "Export Case ZIP",
+            data=case_archive_bytes,
+            file_name=case_filename,
+            mime="application/zip",
+            key="export_case_zip",
+        )
+    with storage_col2:
+        if st.button("Save Case to Google Drive", key="save_case_to_google_drive"):
+            try:
+                uploaded_file = upload_case_archive_to_drive(
+                    case_filename,
+                    case_archive_bytes,
+                    st.session_state.get("case_drive_folder_id", DEFAULT_CASE_DRIVE_FOLDER_ID),
+                )
+                st.success(f"Case berhasil disimpan ke Google Drive: {uploaded_file.get('name')}")
+                if uploaded_file.get("webViewLink"):
+                    st.markdown(f"[Buka file di Google Drive]({uploaded_file['webViewLink']})")
+            except Exception as e:
+                st.error("Belum bisa menyimpan ke Google Drive.")
+                st.exception(e)
+                st.info(
+                    "Pastikan dependency Google Drive sudah terpasang, kredensial service account tersedia, "
+                    "dan folder Drive sudah di-share ke email service account tersebut."
+                )
+
+    st.caption(
+        "Folder default: "
+        f"`{st.session_state.get('case_drive_folder_id', DEFAULT_CASE_DRIVE_FOLDER_ID)}`. "
+        "Untuk mode Drive, gunakan service account melalui `st.secrets['gdrive_service_account']` "
+        "atau environment variable `GOOGLE_APPLICATION_CREDENTIALS`."
+    )
+
 
 with tab_tower:
     st.subheader("Tower Schedule")
@@ -5323,6 +6112,10 @@ with summary_container:
                 default_show_fault=True,
                 height=560,
                 focus_on_fault=True,
+            )
+            render_fault_weather_lightning_summary(
+                summary_tower_df,
+                key_prefix="summary_weather_lightning",
             )
         else:
             st.info("Tower map tersedia, tetapi lokasi fault akan muncul setelah perhitungan DE atau SE selesai.")

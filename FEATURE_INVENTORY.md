@@ -14,6 +14,7 @@ Dokumen ini adalah baseline fitur, logika, dan metode kalkulasi aplikasi. Saat m
 - `Summary`
 - `Setup DB`
 - `Tower Schedule`
+- `Case Storage` berada di dalam `Setup DB`, sedangkan restore case ZIP berada di sidebar.
 - `Local End`
 - `Remote End`
 - `Line`
@@ -28,6 +29,7 @@ Dokumen ini adalah baseline fitur, logika, dan metode kalkulasi aplikasi. Saat m
 
 - Local COMTRADE wajib: `.cfg` dan `.dat`.
 - Remote COMTRADE opsional: `.cfg` dan `.dat`, dipakai untuk Double-End, remote HR, remote SE, remote R-X locus, dan perbandingan summary.
+- Sidebar menerima `Load Case (.zip)` untuk memulihkan rekaman local/remote, parameter user, dan hasil kalkulasi dari case yang pernah disimpan.
 - Database spreadsheet utama dipakai untuk line parameter dan distance relay settings.
 - Spreadsheet tower schedule terpisah dipakai untuk data tower, panjang line alternatif, map, dan fault location map.
 - File Excel/Google Sheet conductor impedance dapat dibaca sebagai sumber parameter konduktor/line jika fitur import dipakai.
@@ -190,6 +192,7 @@ Dokumen ini adalah baseline fitur, logika, dan metode kalkulasi aplikasi. Saat m
 - Kontrol peta dibungkus dalam expander `Map Settings`.
   - Default tertutup di Summary/report.
   - Default terbuka di Tower Schedule/exploration.
+- Kontrol layer bawaan Leaflet/Folium (`Satelit`, `Street map`, `Tower`, `Fault Location`) disembunyikan dari map karena pilihan layer sudah dikendalikan oleh kontrol Streamlit agar report lebih bersih.
 - Marker tower:
   - default size 10.
   - label tower default aktif.
@@ -219,6 +222,7 @@ Dokumen ini adalah baseline fitur, logika, dan metode kalkulasi aplikasi. Saat m
   - pusat marker tepat pada koordinat interpolasi.
   - span pengapit di-highlight merah.
   - label fault permanen menampilkan sumber, jarak, dan rasio span.
+  - label fault diposisikan adaptif menjauh dari arah span pengapit agar tidak tumpang tindih dengan label nomor tower.
 - Popup fault menampilkan:
   - sumber kalkulasi
   - distance
@@ -241,6 +245,12 @@ Dokumen ini adalah baseline fitur, logika, dan metode kalkulasi aplikasi. Saat m
   - semua kolom spreadsheet tetap ditampilkan.
   - kolom tambahan `Fault Context`.
   - kolom tambahan `Distance from Fault km`.
+- Summary juga menampilkan cuaca sekitar titik gangguan:
+  - sumber lokasi mengikuti pilihan fault pada Tower Map Summary, default DE bila tersedia.
+  - lokasi cuaca diambil dari dua tower pengapit titik gangguan; jika tidak ada span pengapit, ambil dua tower terdekat berdasarkan `KUMULATIF km`.
+  - cuaca terkini memakai Open-Meteo no-key forecast API.
+  - histori petir sementara memakai indikasi weather-code thunderstorm 7 hari terakhir dari Open-Meteo.
+  - aplikasi tidak mengklaim data tersebut sebagai histori sambaran petir aktual; sambaran aktual memerlukan integrasi provider lightning khusus.
 
 ## High Resistance Check
 
@@ -434,6 +444,7 @@ Dokumen ini adalah baseline fitur, logika, dan metode kalkulasi aplikasi. Saat m
   - estimasi penyebab gangguan
   - grafik SE/DE
   - Tower Map Fault Location jika data tower tersedia
+  - cuaca terkini dan indikasi thunderstorm pada dua tower terdekat/pengapit titik fault
   - R-X Locus local/remote
   - warning kualitas DE/HR.
 - Grafik SE/DE:
@@ -447,6 +458,48 @@ Dokumen ini adalah baseline fitur, logika, dan metode kalkulasi aplikasi. Saat m
   - fokus ke dua tower pengapit.
   - Map Settings default tertutup.
   - tabel -5/+5 tower sekitar fault default terbuka saat focus fault.
+- Weather/Lightning Summary:
+  - tampil setelah Tower Map Fault Location memiliki data tower dan sumber fault.
+  - ditampilkan sebagai kartu grafis per tower, bukan dataframe interaktif, agar Summary/report lebih mudah dibaca.
+  - kartu berisi tower, jarak dari fault, koordinat, cuaca terkini, temperatur, kelembapan, hujan/presipitasi, tutupan awan, angin, timestamp cuaca, dan indikasi thunderstorm terakhir.
+  - kartu harus print-friendly dan tidak pecah di tengah halaman bila memungkinkan.
+  - jika Open-Meteo tidak dapat diakses, kartu menampilkan pesan gagal baca tanpa menghentikan Summary.
+  - label harus jelas bahwa histori petir adalah proxy thunderstorm, bukan data strike aktual.
+
+## Case Storage
+
+- Tujuan:
+  - menyimpan rekaman yang diupload.
+  - menyimpan perubahan parameter user.
+  - menyimpan hasil kalkulasi.
+  - memulihkan case agar user tidak perlu upload dan setting ulang dari awal.
+- Format utama adalah arsip ZIP:
+  - `records/local_cfg`
+  - `records/local_dat`
+  - `records/remote_cfg`
+  - `records/remote_dat`
+  - `manifest.json`
+  - `case_state.json`
+- `manifest.json` berisi schema, timestamp, nama case, folder Drive target, dan daftar file.
+- `case_state.json` berisi snapshot `st.session_state` yang dibuat JSON-safe:
+  - `pandas.DataFrame` disimpan sebagai records + columns.
+  - `complex` disimpan sebagai real/imag.
+  - `numpy` scalar/array dinormalisasi ke tipe JSON.
+  - bytes rekaman tidak masuk JSON; bytes disimpan sebagai file di ZIP.
+- Restore:
+  - dilakukan dari sidebar sebelum validasi local COMTRADE.
+  - file dari ZIP dibungkus sebagai upload virtual dengan `.name` dan `.getvalue()` agar workflow existing tetap berjalan.
+  - setelah restore, aplikasi rerun dan memakai file/parameter dari case.
+- Export:
+  - tombol `Export Case ZIP` tersedia pada `Setup DB > Case Storage`.
+  - nama default mengikuti `case_name` atau `line_name`.
+- Google Drive:
+  - folder default: `<CASE_DRIVE_FOLDER_ID>`.
+  - tombol `Save Case to Google Drive` mengupload ZIP ke folder tersebut.
+  - membutuhkan dependency `google-api-python-client` dan `google-auth`.
+  - membutuhkan kredensial service account via `st.secrets['gdrive_service_account']` atau environment variable `GOOGLE_APPLICATION_CREDENTIALS`.
+  - folder Drive harus di-share ke email service account.
+  - jika kredensial/dependency belum ada, aplikasi menampilkan error dan instruksi tanpa menghentikan workflow.
 
 ## Print Report
 
@@ -483,6 +536,18 @@ Dokumen ini adalah baseline fitur, logika, dan metode kalkulasi aplikasi. Saat m
   - `tower_schedule_selected_length_source`
   - `tower_schedule_selected_segment`
   - `tower_schedule_selected_ultg`
+- Case Storage:
+  - `case_name`
+  - `case_drive_folder_url`
+  - `case_drive_folder_id`
+  - `case_local_cfg_name`
+  - `case_local_cfg_bytes`
+  - `case_local_dat_name`
+  - `case_local_dat_bytes`
+  - `case_remote_cfg_name`
+  - `case_remote_cfg_bytes`
+  - `case_remote_dat_name`
+  - `case_remote_dat_bytes`
 - HR:
   - `high_resistance_result`
   - remote equivalent if calculated.
