@@ -259,9 +259,11 @@ def apply_runtime_credentials(payload: dict):
         ("database_spreadsheet_url",),
     )
     if database_url:
-        st.session_state["database_spreadsheet_url"] = str(database_url).strip()
-        st.session_state["line_data_spreadsheet_url"] = str(database_url).strip()
-        st.session_state["cable_data_spreadsheet_url"] = str(database_url).strip()
+        database_url = str(database_url).strip()
+        st.session_state["database_spreadsheet_url"] = database_url
+        st.session_state["line_data_spreadsheet_url"] = database_url
+        st.session_state["cable_data_spreadsheet_url"] = database_url
+        st.session_state["database_spreadsheet_url_input"] = database_url
         applied.append("Database Spreadsheet URL")
 
     mapping = [
@@ -316,7 +318,18 @@ def apply_runtime_credentials(payload: dict):
     for state_key, label, *paths in mapping:
         value = _nested_config_value(payload, *paths)
         if value:
-            st.session_state[state_key] = str(value).strip()
+            value = str(value).strip()
+            st.session_state[state_key] = value
+            widget_key = {
+                "line_data_sheet_name": "line_data_sheet_name_manual",
+                "cable_data_sheet_name": "cable_data_sheet_name_manual",
+                "distance_settings_sheet_name": "distance_settings_sheet_name_manual",
+                "tower_schedule_url": "tower_schedule_url_setup_input",
+                "tower_schedule_sheet_name": "tower_schedule_sheet_setup_input",
+                "case_drive_folder_url": "case_drive_folder_url_input",
+            }.get(state_key)
+            if widget_key:
+                st.session_state[widget_key] = value
             applied.append(label)
 
     openweather_key = _nested_config_value(
@@ -327,7 +340,9 @@ def apply_runtime_credentials(payload: dict):
         ("openweather_api_key",),
     )
     if openweather_key:
-        st.session_state["openweather_lightning_api_key"] = str(openweather_key).strip()
+        openweather_key = str(openweather_key).strip()
+        st.session_state["openweather_lightning_api_key"] = openweather_key
+        st.session_state["summary_weather_lightning_openweather_api_key_input"] = openweather_key
         applied.append("OpenWeather API key")
 
     service_account = _nested_config_value(
@@ -8220,7 +8235,22 @@ with tab0:
                     else:
                         st.warning("Credentials terbaca, tetapi tidak ada field yang cocok untuk diterapkan.")
             else:
-                st.info(f"Credentials aktif: {st.session_state.get('runtime_credentials_loaded_name', uploaded_credentials.name)}")
+                payload = st.session_state.get("runtime_credentials")
+                if not isinstance(payload, dict):
+                    payload, error = parse_runtime_credentials_upload(uploaded_credentials)
+                    if error:
+                        st.error(error)
+                        payload = None
+                    elif payload is not None:
+                        st.session_state["runtime_credentials"] = payload
+                applied = apply_runtime_credentials(payload) if isinstance(payload, dict) else []
+                if applied:
+                    st.info(
+                        f"Credentials aktif: {st.session_state.get('runtime_credentials_loaded_name', uploaded_credentials.name)}. "
+                        "Nilai konfigurasi diterapkan ulang ke field."
+                    )
+                else:
+                    st.info(f"Credentials aktif: {st.session_state.get('runtime_credentials_loaded_name', uploaded_credentials.name)}")
         if st.button("Clear runtime credentials from session", key="clear_runtime_credentials"):
             for key in [
                 "runtime_credentials",
