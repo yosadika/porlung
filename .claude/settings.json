@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile tabs/line_parameter.py)",
+      "Bash(awk 'NR==3784 {flag=1} flag {print; if \\(NR==4556 && /^def resolve_end_analysis_context/\\) {flag=0; exit}}' app.py)",
+      "Bash(awk 'NR==4555 || NR==4556 || NR==4557' app.py)",
+      "Bash(python)",
+      "Bash(python -m py_compile app.py tabs/line_parameter.py)",
+      "Bash(awk 'NR>=4298' app.py)",
+      "Bash(python -m py_compile tabs/double_ended.py)",
+      "Bash(python -m py_compile app.py tabs/double_ended.py tabs/line_parameter.py)",
+      "Bash(python -m py_compile tabs/signal_assignment.py)",
+      "Bash(python -m py_compile app.py tabs/double_ended.py tabs/line_parameter.py tabs/signal_assignment.py)",
+      "Bash(python -m py_compile app.py app_helpers.py app_runtime.py auto_assignment.py case_storage.py comtrade_reader.py conductor_impedance_importer.py fault_detection.py fault_type.py fault_workflow_helpers.py high_resistance.py line_analysis_helpers.py line_parameter.py phasor.py rx_locus.py signal_assignment.py single_ended.py summary_helpers.py tower_map.py two_ended.py waveform_helpers.py weather_services.py weather_ui.py tabs/__init__.py tabs/double_ended.py tabs/line_parameter.py tabs/signal_assignment.py)"
+    ]
+  }
+}

@@ -67,6 +67,12 @@ Dokumen ini mencatat flow runtime dan pembagian modul setelah refactor bertahap.
   - Berisi pemilihan sinyal fault utama, waveform fokus Summary, estimasi penyebab gangguan, scoring single-ended, dan grafik posisi SE/DE.
   - Fungsi yang membaca `st.session_state` langsung tetap berada di `app.py`.
 
+- `tabs/`
+  - Berisi modul render per-tab. Setiap modul mengekspos satu fungsi `render(...)` yang dipanggil oleh `app.py` di dalam blok `with tab_x:`.
+  - `tabs/line_parameter.py` — tab `Line`. Signature: `render()`. Semua state lewat `st.session_state`.
+  - `tabs/double_ended.py` — tab `Double-End`. Signature: `render()`. Semua state lewat `st.session_state`.
+  - `tabs/signal_assignment.py` — sub-tab `Signals` di `Local End`. Signature: `render(df)`. `df` adalah COMTRADE DataFrame lokal hasil baca CFG/DAT. Semua widget memakai `key=local_signal_*` agar state stabil antar rerun.
+
 ## Runtime Flow Saat Aplikasi Dibuka
 
 1. `app.py` memuat import, constant, cache wrapper, dan helper render yang masih berada di file utama.
@@ -112,5 +118,5 @@ Dokumen ini mencatat flow runtime dan pembagian modul setelah refactor bertahap.
 - Pindahkan satu kelompok fungsi yang kohesif setiap tahap.
 - Jangan ubah perilaku UI/kalkulasi bersamaan dengan pemindahan modul.
 - Setelah setiap tahap, jalankan minimal:
-  - `python -m py_compile app.py app_runtime.py app_helpers.py case_storage.py weather_services.py weather_ui.py tower_map.py rx_locus.py line_analysis_helpers.py waveform_helpers.py fault_workflow_helpers.py summary_helpers.py`
+  - `python -m py_compile app.py app_runtime.py app_helpers.py case_storage.py weather_services.py weather_ui.py tower_map.py rx_locus.py line_analysis_helpers.py waveform_helpers.py fault_workflow_helpers.py summary_helpers.py tabs/line_parameter.py tabs/double_ended.py tabs/signal_assignment.py`
 - Jika modul baru dibuat, tambahkan catatan singkat di dokumen ini.
