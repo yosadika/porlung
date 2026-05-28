@@ -27,6 +27,10 @@ dist/
 *.jks
 credentials.json
 service-account*.json
+.streamlit/secrets.toml
+.streamlit/secrets.toml.*
+credentials*.toml
+credentials*.json
 
 # Local/private database files
 database/

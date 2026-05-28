@@ -9,8 +9,13 @@ import io
 import zipfile
 import textwrap
 import html
+import hashlib
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
+try:
+    import tomllib
+except ModuleNotFoundError:
+    tomllib = None
 import folium
 import numpy as np
 import pandas as pd
@@ -82,13 +87,10 @@ from single_ended import (
 
 
 MAX_PLOT_POINTS = 6000
-DEFAULT_TOWER_SCHEDULE_URL = (
-    "https://docs.google.com/spreadsheets/d/"
-    "<TOWER_SCHEDULE_SPREADSHEET_ID>/edit?usp=sharing"
-)
+DEFAULT_TOWER_SCHEDULE_URL = ""
 DEFAULT_TOWER_SCHEDULE_SHEET = "tower_schedule"
-DEFAULT_CASE_DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/<CASE_DRIVE_FOLDER_ID>?usp=sharing"
-DEFAULT_CASE_DRIVE_FOLDER_ID = "<CASE_DRIVE_FOLDER_ID>"
+DEFAULT_CASE_DRIVE_FOLDER_URL = ""
+DEFAULT_CASE_DRIVE_FOLDER_ID = ""
 OPENWEATHER_LIGHTNING_ENDPOINT = "https://demo.openweathermap.org/lightning/1.0/data"
 OPENWEATHER_ONECALL_CURRENT_ENDPOINT = "https://api.openweathermap.org/data/4.0/onecall/current"
 OPENWEATHER_ONECALL_15MIN_ENDPOINT = "https://api.openweathermap.org/data/4.0/onecall/timeline/15min"
@@ -175,11 +177,174 @@ CASE_STATE_EXCLUDE_KEYS = {
     "case_local_dat_bytes",
     "case_remote_cfg_bytes",
     "case_remote_dat_bytes",
+    "runtime_credentials",
+    "runtime_credentials_loaded_name",
+    "runtime_gdrive_service_account",
     "openweather_lightning_api_key",
     "xweather_client_id",
     "xweather_client_secret",
     "accuweather_api_key",
 }
+
+
+def _nested_config_value(config: dict, *paths, default=""):
+    if not isinstance(config, dict):
+        return default
+    for path in paths:
+        node = config
+        for key in path:
+            if not isinstance(node, dict) or key not in node:
+                node = None
+                break
+            node = node[key]
+        if node not in [None, ""]:
+            return node
+    return default
+
+
+def get_config_secret(name: str, default: str = ""):
+    try:
+        value = st.secrets.get(name)
+        if value not in [None, ""]:
+            return str(value).strip()
+    except Exception:
+        pass
+    return str(os.environ.get(name, default) or "").strip()
+
+
+def parse_runtime_credentials_upload(uploaded_file):
+    if uploaded_file is None:
+        return None, None
+    name = str(getattr(uploaded_file, "name", "") or "credentials").strip()
+    content = uploaded_file.getvalue()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None, "File credentials harus berupa teks UTF-8 JSON/TOML."
+
+    suffix = name.lower().rsplit(".", 1)[-1] if "." in name else ""
+    try:
+        if suffix == "json":
+            payload = json.loads(text)
+        elif suffix == "toml":
+            if tomllib is None:
+                return None, "Runtime Python ini belum mendukung TOML. Gunakan credentials.json."
+            payload = tomllib.loads(text)
+        else:
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                if tomllib is None:
+                    raise
+                payload = tomllib.loads(text)
+    except Exception as exc:
+        return None, f"Gagal membaca credentials: {exc}"
+
+    if not isinstance(payload, dict):
+        return None, "Isi credentials harus berupa object/dictionary."
+    return payload, None
+
+
+def apply_runtime_credentials(payload: dict):
+    if not isinstance(payload, dict):
+        return []
+
+    applied = []
+    database_url = _nested_config_value(
+        payload,
+        ("spreadsheet", "database_url"),
+        ("spreadsheet", "database_spreadsheet_url"),
+        ("spreadsheets", "database_url"),
+        ("database", "spreadsheet_url"),
+        ("database_spreadsheet_url",),
+    )
+    if database_url:
+        st.session_state["database_spreadsheet_url"] = str(database_url).strip()
+        st.session_state["line_data_spreadsheet_url"] = str(database_url).strip()
+        st.session_state["cable_data_spreadsheet_url"] = str(database_url).strip()
+        applied.append("Database Spreadsheet URL")
+
+    mapping = [
+        (
+            "line_data_sheet_name",
+            "Line Data Sheet",
+            ("spreadsheet", "database_line_sheet"),
+            ("spreadsheet", "line_data_sheet"),
+            ("database", "line_sheet"),
+            ("line_data_sheet_name",),
+        ),
+        (
+            "cable_data_sheet_name",
+            "Cable Data Sheet",
+            ("spreadsheet", "database_cable_sheet"),
+            ("spreadsheet", "cable_data_sheet"),
+            ("database", "cable_sheet"),
+            ("cable_data_sheet_name",),
+        ),
+        (
+            "distance_settings_sheet_name",
+            "Distance Settings Sheet",
+            ("spreadsheet", "database_distance_sheet"),
+            ("spreadsheet", "distance_settings_sheet"),
+            ("database", "distance_sheet"),
+            ("distance_settings_sheet_name",),
+        ),
+        (
+            "tower_schedule_url",
+            "Tower Schedule URL",
+            ("spreadsheet", "tower_schedule_url"),
+            ("spreadsheet", "tower_schedule_spreadsheet_url"),
+            ("spreadsheets", "tower_schedule_url"),
+            ("tower_schedule", "spreadsheet_url"),
+            ("tower_schedule_url",),
+        ),
+        (
+            "tower_schedule_sheet_name",
+            "Tower Schedule Sheet",
+            ("spreadsheet", "tower_schedule_sheet"),
+            ("tower_schedule", "sheet"),
+            ("tower_schedule_sheet_name",),
+        ),
+        (
+            "case_drive_folder_url",
+            "Case Drive Folder URL",
+            ("case_storage", "drive_folder_url"),
+            ("drive", "folder_url"),
+            ("case_drive_folder_url",),
+        ),
+    ]
+    for state_key, label, *paths in mapping:
+        value = _nested_config_value(payload, *paths)
+        if value:
+            st.session_state[state_key] = str(value).strip()
+            applied.append(label)
+
+    openweather_key = _nested_config_value(
+        payload,
+        ("openweather", "api_key"),
+        ("weather", "openweather_api_key"),
+        ("OPENWEATHER_API_KEY",),
+        ("openweather_api_key",),
+    )
+    if openweather_key:
+        st.session_state["openweather_lightning_api_key"] = str(openweather_key).strip()
+        applied.append("OpenWeather API key")
+
+    service_account = _nested_config_value(
+        payload,
+        ("gdrive_service_account",),
+        ("google_service_account",),
+        ("service_account",),
+        default=None,
+    )
+    if isinstance(service_account, dict):
+        st.session_state["runtime_gdrive_service_account"] = service_account
+        applied.append("Google service account")
+
+    if st.session_state.get("case_drive_folder_url"):
+        st.session_state["case_drive_folder_id"] = extract_google_drive_folder_id(st.session_state["case_drive_folder_url"])
+
+    return applied
 
 
 def extract_google_drive_folder_id(url_or_id: str):
@@ -319,9 +484,9 @@ def get_google_drive_service():
     scopes = ["https://www.googleapis.com/auth/drive.file"]
     credentials_info = None
     try:
-        credentials_info = st.secrets.get("gdrive_service_account")
+        credentials_info = st.session_state.get("runtime_gdrive_service_account") or st.secrets.get("gdrive_service_account")
     except Exception:
-        credentials_info = None
+        credentials_info = st.session_state.get("runtime_gdrive_service_account")
 
     credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if credentials_info:
@@ -7944,46 +8109,156 @@ def build_rx_locus_figure_from_session(end_side: str):
 with tab0:
     st.subheader("Spreadsheet Database Configuration")
 
-    default_database_spreadsheet_url = (
-        "https://docs.google.com/spreadsheets/d/"
-        "<DATABASE_SPREADSHEET_ID>/edit?usp=sharing"
-    )
-    old_line_spreadsheet_url = (
-        "https://docs.google.com/spreadsheets/d/"
-        "<OLD_LINE_SPREADSHEET_ID>/edit?usp=sharing"
-    )
-    old_cable_spreadsheet_url = (
-        "https://docs.google.com/spreadsheets/d/"
-        "<OLD_CABLE_SPREADSHEET_ID>/edit?usp=sharing"
-    )
+    default_database_spreadsheet_url = get_config_secret("DATABASE_SPREADSHEET_URL")
+    default_tower_schedule_url = get_config_secret("TOWER_SCHEDULE_SPREADSHEET_URL", DEFAULT_TOWER_SCHEDULE_URL)
+    default_case_drive_folder_url = get_config_secret("CASE_DRIVE_FOLDER_URL", DEFAULT_CASE_DRIVE_FOLDER_URL)
+    old_line_spreadsheet_url = get_config_secret("OLD_LINE_SPREADSHEET_URL")
+    old_cable_spreadsheet_url = get_config_secret("OLD_CABLE_SPREADSHEET_URL")
+    legacy_database_urls = {
+        url for url in [old_line_spreadsheet_url, old_cable_spreadsheet_url] if url
+    }
+    default_line_sheet_name = get_config_secret("DATABASE_LINE_SHEET", "line_impedance")
+    default_cable_sheet_name = get_config_secret("DATABASE_CABLE_SHEET", "cable_impedance")
+    default_tower_schedule_sheet = get_config_secret("TOWER_SCHEDULE_SHEET", DEFAULT_TOWER_SCHEDULE_SHEET)
+
+    if (
+        "database_spreadsheet_url" not in st.session_state
+        and default_database_spreadsheet_url
+    ):
+        st.session_state["database_spreadsheet_url"] = default_database_spreadsheet_url
+        st.session_state["line_data_spreadsheet_url"] = default_database_spreadsheet_url
+        st.session_state["cable_data_spreadsheet_url"] = default_database_spreadsheet_url
+    if "tower_schedule_url" not in st.session_state and default_tower_schedule_url:
+        st.session_state["tower_schedule_url"] = default_tower_schedule_url
+    if "case_drive_folder_url" not in st.session_state and default_case_drive_folder_url:
+        st.session_state["case_drive_folder_url"] = default_case_drive_folder_url
+
+    if "line_data_sheet_name" not in st.session_state:
+        st.session_state["line_data_sheet_name"] = default_line_sheet_name
+    if "cable_data_sheet_name" not in st.session_state:
+        st.session_state["cable_data_sheet_name"] = default_cable_sheet_name
+    if "tower_schedule_sheet_name" not in st.session_state:
+        st.session_state["tower_schedule_sheet_name"] = default_tower_schedule_sheet
+
+    if st.session_state.get("database_spreadsheet_url") in legacy_database_urls:
+        fallback_url = default_database_spreadsheet_url if default_database_spreadsheet_url not in legacy_database_urls else ""
+        st.session_state["database_spreadsheet_url"] = fallback_url
+        st.session_state["line_data_spreadsheet_url"] = fallback_url
+        st.session_state["cable_data_spreadsheet_url"] = fallback_url
+
+    if not any(
+        st.session_state.get(key)
+        for key in [
+            "database_spreadsheet_url",
+            "tower_schedule_url",
+            "openweather_lightning_api_key",
+        ]
+    ):
+        st.info(
+            "Belum ada runtime credentials atau Streamlit secrets. Upload credentials file, isi secrets, "
+            "atau masukkan URL/API key secara manual untuk memuat data otomatis."
+        )
+
+    with st.expander("Runtime credentials upload", expanded=False):
+        st.caption(
+            "Opsional untuk repo public: upload `credentials.toml` atau `credentials.json` agar URL spreadsheet "
+            "dan API key terisi otomatis tanpa hardcode di GitHub. File hanya dibaca ke session, tidak disimpan ke disk/case ZIP."
+        )
+        template = textwrap.dedent(
+            """
+            [spreadsheet]
+            database_url = "https://docs.google.com/spreadsheets/d/..."
+            database_line_sheet = "line_impedance"
+            database_cable_sheet = "cable_impedance"
+            database_distance_sheet = "distance_settings"
+            tower_schedule_url = "https://docs.google.com/spreadsheets/d/..."
+            tower_schedule_sheet = "tower_schedule"
+
+            [openweather]
+            api_key = "isi_api_key_openweather"
+
+            [case_storage]
+            drive_folder_url = "https://drive.google.com/drive/folders/..."
+
+            # Opsional untuk Google Drive/service account.
+            # [google_service_account]
+            # type = "service_account"
+            # project_id = "..."
+            # private_key_id = "..."
+            # private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
+            # client_email = "..."
+            # client_id = "..."
+            # token_uri = "https://oauth2.googleapis.com/token"
+            """
+        ).strip()
+        st.download_button(
+            "Download template credentials.toml",
+            data=template,
+            file_name="credentials.template.toml",
+            mime="text/plain",
+            key="download_runtime_credentials_template",
+        )
+        uploaded_credentials = st.file_uploader(
+            "Upload credentials file",
+            type=["toml", "json"],
+            key="runtime_credentials_upload",
+            help="Gunakan file milik user. Jangan upload file credentials ke GitHub.",
+        )
+        if uploaded_credentials is not None:
+            fingerprint = hashlib.sha256(uploaded_credentials.getvalue()).hexdigest()
+            if st.session_state.get("runtime_credentials_fingerprint") != fingerprint:
+                payload, error = parse_runtime_credentials_upload(uploaded_credentials)
+                if error:
+                    st.error(error)
+                else:
+                    st.session_state["runtime_credentials"] = payload
+                    st.session_state["runtime_credentials_loaded_name"] = uploaded_credentials.name
+                    st.session_state["runtime_credentials_fingerprint"] = fingerprint
+                    applied = apply_runtime_credentials(payload)
+                    if applied:
+                        st.success("Credentials diterapkan: " + ", ".join(applied))
+                    else:
+                        st.warning("Credentials terbaca, tetapi tidak ada field yang cocok untuk diterapkan.")
+            else:
+                st.info(f"Credentials aktif: {st.session_state.get('runtime_credentials_loaded_name', uploaded_credentials.name)}")
+        if st.button("Clear runtime credentials from session", key="clear_runtime_credentials"):
+            for key in [
+                "runtime_credentials",
+                "runtime_credentials_loaded_name",
+                "runtime_credentials_fingerprint",
+                "runtime_gdrive_service_account",
+                "openweather_lightning_api_key",
+                "database_spreadsheet_url",
+                "line_data_spreadsheet_url",
+                "cable_data_spreadsheet_url",
+                "tower_schedule_url",
+                "case_drive_folder_url",
+                "case_drive_folder_id",
+            ]:
+                st.session_state.pop(key, None)
+            st.success("Runtime credentials dibersihkan dari session.")
 
     existing_database_url = (
         st.session_state.get("database_spreadsheet_url")
         or st.session_state.get("line_data_spreadsheet_url")
         or st.session_state.get("cable_data_spreadsheet_url")
-        or default_database_spreadsheet_url
+        or ""
     )
-    if existing_database_url in [old_line_spreadsheet_url, old_cable_spreadsheet_url]:
-        existing_database_url = default_database_spreadsheet_url
+    if existing_database_url in legacy_database_urls:
+        existing_database_url = default_database_spreadsheet_url if default_database_spreadsheet_url not in legacy_database_urls else ""
 
     st.session_state["database_spreadsheet_url"] = existing_database_url
     st.session_state["line_data_spreadsheet_url"] = existing_database_url
     st.session_state["cable_data_spreadsheet_url"] = existing_database_url
 
-    if "line_data_sheet_name" not in st.session_state:
-        st.session_state["line_data_sheet_name"] = "line_impedance"
-
-    if "cable_data_sheet_name" not in st.session_state:
-        st.session_state["cable_data_sheet_name"] = "cable_impedance"
-
     st.caption(
-        "Spreadsheet harus dapat diakses publik atau minimal dapat dibaca melalui link. "
-        "Aplikasi membaca data memakai endpoint CSV Google Sheets."
+        "URL spreadsheet dapat diisi manual, dari runtime credentials, Streamlit secrets, atau environment variable. "
+        "Untuk repo public, jangan hardcode URL private di source code."
     )
 
     database_spreadsheet_url = st.text_input(
         "Database Spreadsheet URL",
-        value=st.session_state.get("database_spreadsheet_url", default_database_spreadsheet_url),
+        value=st.session_state.get("database_spreadsheet_url", ""),
         key="database_spreadsheet_url_input",
     )
     database_spreadsheet_url = database_spreadsheet_url.strip()
@@ -8059,13 +8334,13 @@ with tab0:
     with tower_db_col1:
         tower_schedule_url_setup = st.text_input(
             "Tower Schedule Spreadsheet URL",
-            value=st.session_state.get("tower_schedule_url", DEFAULT_TOWER_SCHEDULE_URL),
+            value=st.session_state.get("tower_schedule_url", ""),
             key="tower_schedule_url_setup_input",
         ).strip()
     with tower_db_col2:
         tower_schedule_sheet_setup = st.text_input(
             "Tower Schedule Sheet",
-            value=st.session_state.get("tower_schedule_sheet_name", DEFAULT_TOWER_SCHEDULE_SHEET),
+            value=st.session_state.get("tower_schedule_sheet_name", default_tower_schedule_sheet),
             key="tower_schedule_sheet_setup_input",
         ).strip()
     with tower_db_col3:
@@ -8078,8 +8353,8 @@ with tab0:
             st.session_state["tower_schedule_loaded"] = False
             st.success("Cache tower schedule dibersihkan.")
 
-    st.session_state["tower_schedule_url"] = tower_schedule_url_setup or DEFAULT_TOWER_SCHEDULE_URL
-    st.session_state["tower_schedule_sheet_name"] = tower_schedule_sheet_setup or DEFAULT_TOWER_SCHEDULE_SHEET
+    st.session_state["tower_schedule_url"] = tower_schedule_url_setup
+    st.session_state["tower_schedule_sheet_name"] = tower_schedule_sheet_setup or default_tower_schedule_sheet
 
     st.markdown("### Case Storage")
     st.caption(
@@ -8097,10 +8372,10 @@ with tab0:
     with case_col2:
         drive_folder_input = st.text_input(
             "Google Drive Folder URL / ID",
-            value=st.session_state.get("case_drive_folder_url", DEFAULT_CASE_DRIVE_FOLDER_URL),
+            value=st.session_state.get("case_drive_folder_url", ""),
             key="case_drive_folder_url_input",
         ).strip()
-        st.session_state["case_drive_folder_url"] = drive_folder_input or DEFAULT_CASE_DRIVE_FOLDER_URL
+        st.session_state["case_drive_folder_url"] = drive_folder_input
         st.session_state["case_drive_folder_id"] = extract_google_drive_folder_id(st.session_state["case_drive_folder_url"])
 
     case_filename, case_archive_bytes = build_case_archive_bytes(st.session_state.get("case_name", "fault_case"))
@@ -8119,7 +8394,7 @@ with tab0:
                 uploaded_file = upload_case_archive_to_drive(
                     case_filename,
                     case_archive_bytes,
-                    st.session_state.get("case_drive_folder_id", DEFAULT_CASE_DRIVE_FOLDER_ID),
+                    st.session_state.get("case_drive_folder_id", ""),
                 )
                 st.success(f"Case berhasil disimpan ke Google Drive: {uploaded_file.get('name')}")
                 if uploaded_file.get("webViewLink"):
@@ -8133,9 +8408,8 @@ with tab0:
                 )
 
     st.caption(
-        "Folder default: "
-        f"`{st.session_state.get('case_drive_folder_id', DEFAULT_CASE_DRIVE_FOLDER_ID)}`. "
-        "Untuk mode Drive, gunakan service account melalui `st.secrets['gdrive_service_account']` "
+        "Untuk mode Drive, isi folder melalui runtime credentials, Streamlit secrets, environment variable, "
+        "atau input manual. Gunakan service account melalui runtime credentials, `st.secrets['gdrive_service_account']`, "
         "atau environment variable `GOOGLE_APPLICATION_CREDENTIALS`."
     )
 
@@ -10121,8 +10395,7 @@ with tab7:
             database_source_key = "cable_data" if use_cable_database else "line_data"
             database_spreadsheet_url = st.session_state.get(
                 f"{database_source_key}_spreadsheet_url",
-                "https://docs.google.com/spreadsheets/d/"
-                "<DATABASE_SPREADSHEET_ID>/edit?usp=sharing",
+                st.session_state.get("database_spreadsheet_url", ""),
             )
             database_sheet_name = st.session_state.get(
                 f"{database_source_key}_sheet_name",

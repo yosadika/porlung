@@ -141,8 +141,9 @@ Dokumen ini adalah baseline fitur, logika, dan metode kalkulasi aplikasi. Saat m
 ## Tower Schedule
 
 - Spreadsheet default:
-  - URL: `https://docs.google.com/spreadsheets/d/<TOWER_SCHEDULE_SPREADSHEET_ID>/edit?usp=sharing`
-  - sheet: `tower_schedule`
+  - tidak ada URL default yang di-hardcode karena repo bersifat public.
+  - URL dapat diisi dari runtime credentials, Streamlit secrets, environment variable, atau input manual Setup DB.
+  - sheet default tetap `tower_schedule` bila tidak diubah user.
 - URL dan sheet diatur dari `Setup DB`, bukan dari halaman Tower Schedule.
 - Kolom utama:
   - `SPAN`
@@ -431,6 +432,151 @@ Dokumen ini adalah baseline fitur, logika, dan metode kalkulasi aplikasi. Saat m
   - dapat menampilkan trajectory penuh bila user pilih.
 - Summary menampilkan R-X Locus local dan remote sebagai section terpisah agar print tidak menumpuk.
 
+## UI/UX, Frontend, dan Backend Contract
+
+Bagian ini adalah kontrak tampilan dan perilaku data. Agent berikutnya harus membaca bagian ini sebelum mengubah layout, styling, API, atau flow Summary.
+
+### Prinsip UI/UX Umum
+
+- Aplikasi adalah tool engineering/reporting, bukan landing page.
+- Tampilan harus padat, rapi, dan mudah discan saat dipakai berulang.
+- Hindari dekorasi berlebihan, shadow besar, gradient mencolok, dan komponen yang membuat halaman terasa seperti marketing page.
+- Section besar memakai heading yang jelas dan ringkas.
+- Data penting harus tetap terlihat tanpa user harus scroll di dalam card bila memungkinkan.
+- Hindari solusi iframe/scroll internal untuk card Summary, terutama di mobile; komponen harus responsif dan tampil utuh secara natural.
+- Jangan menambah label atau widget yang menyebut data tidak tersedia, misalnya petir/badai, kecuali backend benar-benar punya provider data aktual.
+- Istilah teknis boleh dipakai bila relevan untuk protection engineer, tetapi istilah cuaca/provider harus diterjemahkan ke bahasa Indonesia yang lazim.
+
+### Frontend Streamlit
+
+- UI utama dibuat di Streamlit dengan campuran komponen native dan HTML/CSS custom.
+- HTML custom untuk kartu Summary boleh memakai `st.html` bila tersedia; fallback ke `components.html` hanya jika versi Streamlit belum mendukung.
+- Hindari `st.markdown(..., unsafe_allow_html=True)` untuk blok HTML panjang karena raw HTML multiline dapat terbaca sebagai code block.
+- CSS custom harus scoped pada class komponen, bukan selector global Streamlit yang rapuh, kecuali untuk print/report yang memang perlu override.
+- Card tidak boleh memakai shadow besar yang membuat clipping pada viewport/report.
+- Card harus mempertahankan radius kecil-menengah, border halus, dan background terang.
+- Pada mobile:
+  - layout card harus menjadi satu kolom.
+  - konten card tidak boleh terpotong.
+  - jangan memakai overflow/scroll internal sebagai solusi utama.
+  - grid forecast boleh turun menjadi 4 kolom lalu 2 kolom.
+- Tabel data engineering tetap boleh memakai dataframe Streamlit untuk eksplorasi, tetapi Summary/report harus memakai card/tabel HTML yang print-friendly.
+
+### Backend dan Data Flow
+
+- Backend berada di file Python lokal, terutama `app.py` dan modul kalkulasi pendukung.
+- Jangan memindahkan kalkulasi proteksi ke frontend/HTML/JS.
+- API eksternal harus dipanggil dari Python dengan timeout dan error handling.
+- Kegagalan API eksternal tidak boleh menghentikan Summary; tampilkan pesan gagal baca pada komponen terkait.
+- Session state adalah sumber utama antar halaman; jangan menghapus key lama tanpa migrasi/konfirmasi.
+- API key/secrets tidak boleh ikut tersimpan dalam case ZIP.
+- Karena repo bersifat public, URL spreadsheet private/API key tidak boleh di-hardcode di `app.py`.
+- Setup DB menyediakan `Runtime credentials upload` untuk file `credentials.toml` atau `credentials.json`.
+- Runtime credentials hanya dibaca ke memory/session, tidak ditulis ke disk, tidak dicetak, dan tidak diekspor ke case ZIP.
+- Runtime credentials dapat mengisi otomatis:
+  - Database Spreadsheet URL.
+  - Line/Cable/Distance sheet names.
+  - Tower Schedule Spreadsheet URL dan sheet.
+  - OpenWeather API key.
+  - Case Drive folder URL.
+  - Google service account opsional untuk Drive.
+- Runtime credentials harus dapat dibersihkan dari session dengan tombol `Clear runtime credentials from session`.
+- `.gitignore` harus mengecualikan `.streamlit/secrets.toml`, `credentials*.toml`, dan `credentials*.json`.
+- OpenWeather API key dibaca dari:
+  - `st.session_state["openweather_lightning_api_key"]`
+  - widget `summary_weather_lightning_openweather_api_key_input`
+  - `st.secrets["OPENWEATHER_API_KEY"]`
+  - environment variable `OPENWEATHER_API_KEY`.
+- Input API key kosong tidak boleh menimpa key yang sudah tersimpan.
+- Prioritas konfigurasi runtime yang diharapkan:
+  - uploaded runtime credentials di session.
+  - Streamlit secrets / local `.streamlit/secrets.toml`.
+  - environment variables.
+  - input manual UI.
+  - default demo/public bila memang aman.
+
+### Weather Summary UI Contract
+
+- Judul section adalah `Cuaca Terkini`.
+- Caption harus menjelaskan bahwa data adalah cuaca dan prakiraan hujan dari OpenWeather, bukan data sambaran petir.
+- Pengaturan cuaca berada di expander tertutup agar Summary rapi.
+- Kartu cuaca adalah satu card untuk titik gangguan, bukan dua card tower.
+- Layout desktop:
+  - panel kiri berisi kondisi cuaca saat ini.
+  - panel kanan berisi tren suhu, peluang hujan, ringkasan, sub-card forecast per jam, dan footer sumber/koordinat.
+- Layout mobile:
+  - panel kiri dan kanan stack vertikal.
+  - forecast sub-card turun ke grid responsif.
+  - tidak ada scroll internal pada card.
+- Panel kiri wajib menampilkan:
+  - lokasi fault dan span pengapit.
+  - timestamp cuaca.
+  - simbol cuaca.
+  - deskripsi cuaca bahasa Indonesia.
+  - temperatur `°C`.
+  - terasa seperti `°C`.
+  - hujan saat ini `mm`.
+  - angin `km/h`.
+  - kelembapan `%`.
+  - tutupan awan `%`.
+  - kumulatif fault `km`.
+- Panel kanan wajib menampilkan:
+  - `Tren suhu, °C`.
+  - `Peluang hujan, %`.
+  - ringkasan titik gangguan.
+  - peluang hujan tertinggi.
+  - perkiraan hujan total.
+  - sub-card forecast per 1 jam.
+  - footer koordinat dan sumber API.
+- Grafik tren suhu memakai titik/batang vertikal sederhana tanpa garis penghubung; tampilan ini dipilih karena paling stabil.
+- Grafik peluang hujan memakai bar sederhana tanpa garis penghubung.
+- Bar/titik chart tidak boleh terpotong; area chart harus memberi ruang atas/bawah yang cukup dan tidak memakai clipping yang memotong marker.
+- Simbol cuaca harus memakai HTML entity atau mekanisme stabil lain; jangan memakai emoji mentah yang rawan encoding mojibake seperti `â˜`.
+- Forecast ditampilkan per 1 jam relatif terhadap waktu akses, misalnya akses 01:41 menghasilkan label 02:41, 03:41, dan seterusnya.
+- Teks ringkasan hujan memakai istilah netral:
+  - `Tidak ada indikasi hujan dalam 12 jam ke depan.`
+  - `Ada peluang hujan mulai sekitar HH:MM.`
+- Jangan memakai istilah `hujan kuat` atau `hujan lebat` kecuali backend punya klasifikasi intensitas berbasis ambang mm/jam.
+- Jangan memakai istilah petir/badai/thunderstorm pada Weather Summary tanpa provider lightning/storm aktual yang aktif.
+- Deskripsi cuaca provider diterjemahkan ke bahasa Indonesia, contoh:
+  - `Broken Clouds` -> `Berawan`
+  - `Scattered Clouds` -> `Berawan sebagian`
+  - `Overcast Clouds` -> `Mendung`
+  - `Mainly Clear` -> `Umumnya cerah`
+  - `Clear Sky` -> `Cerah`
+  - `Light Rain` -> `Hujan ringan`.
+
+### Weather Summary Backend Contract
+
+- Koordinat cuaca berasal dari titik gangguan hasil interpolasi Tower Schedule.
+- Default sumber fault mengikuti Tower Map Summary, prioritas DE bila tersedia.
+- OpenWeather One Call 4.0 adalah sumber utama untuk current weather dan forecast.
+- Open-Meteo hanya fallback untuk cuaca saat ini bila OpenWeather tidak tersedia/gagal.
+- Forecast OpenWeather diambil dari timeline 15 menit, lalu diagregasi ke bucket per 1 jam relatif terhadap waktu akses.
+- Untuk tiap bucket forecast, aplikasi menyimpan:
+  - waktu label.
+  - temperatur rata-rata.
+  - peluang hujan maksimum.
+  - presipitasi total.
+  - weather code/deskripsi dominan.
+- Ringkasan hujan memakai probabilitas/akumulasi hujan, bukan data petir.
+- Jangan melakukan request histori thunderstorm/petir untuk Weather Summary selama hasilnya tidak ditampilkan dan tidak menjadi data aktual.
+
+### Map dan Tower UI Contract
+
+- Summary Tower Map default fokus ke titik fault dan dua tower pengapit.
+- Map Settings di Summary default tertutup.
+- Kontrol layer bawaan Folium/Leaflet disembunyikan bila sudah ada kontrol Streamlit pengganti.
+- Label tower pada map ringkas, misalnya `#0164`, sedangkan nama lengkap tetap tersedia pada popup/hover.
+- Tabel tower sekitar fault tetap menampilkan semua kolom spreadsheet dan kolom konteks tambahan.
+
+### Print/Report UI Contract
+
+- Summary harus tetap print-friendly.
+- Sidebar, uploader, toolbar, dan kontrol eksplorasi tidak dicetak.
+- Card/tabel/plot besar tidak boleh pecah secara buruk di tengah halaman.
+- Dataframe interaktif disembunyikan pada print jika ada tabel HTML pengganti.
+
 ## Summary
 
 - Harus tampil setelah COMTRADE lokal berhasil dibaca.
@@ -498,8 +644,9 @@ Dokumen ini adalah baseline fitur, logika, dan metode kalkulasi aplikasi. Saat m
   - tombol `Export Case ZIP` tersedia pada `Setup DB > Case Storage`.
   - nama default mengikuti `case_name` atau `line_name`.
 - Google Drive:
-  - folder default: `<CASE_DRIVE_FOLDER_ID>`.
-  - tombol `Save Case to Google Drive` mengupload ZIP ke folder tersebut.
+  - tidak ada folder default yang di-hardcode karena repo bersifat public.
+  - folder Drive dapat diisi dari runtime credentials, Streamlit secrets, environment variable, atau input manual Setup DB.
+  - tombol `Save Case to Google Drive` mengupload ZIP ke folder tersebut bila folder dan kredensial tersedia.
   - membutuhkan dependency `google-api-python-client` dan `google-auth`.
   - membutuhkan kredensial service account via `st.secrets['gdrive_service_account']` atau environment variable `GOOGLE_APPLICATION_CREDENTIALS`.
   - folder Drive harus di-share ke email service account.
