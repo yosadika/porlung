@@ -1,3 +1,4 @@
+import html
 import math
 import re
 from urllib.parse import quote
@@ -97,12 +98,24 @@ def fault_label_anchor_from_segment(fault_segment):
     return (-18, 20), "left"
 
 
+def _sync_fault_source_default(key_prefix: str, option_keys: list):
+    """Reset ke 'de' saat DE baru pertama kali tersedia dalam sesi ini."""
+    had_de_key = f"{key_prefix}_fault_had_de"
+    source_key = f"{key_prefix}_fault_source"
+    now_has_de = "de" in option_keys
+    if now_has_de and not st.session_state.get(had_de_key, False):
+        st.session_state[source_key] = "de"
+    if now_has_de:
+        st.session_state[had_de_key] = True
+
+
 def get_selected_fault_location_option(key_prefix: str = "summary_tower_fault"):
     fault_options = get_fault_location_map_options()
     if not fault_options:
         return None
     option_keys = [option["key"] for option in fault_options]
     default_key = "de" if "de" in option_keys else option_keys[0]
+    _sync_fault_source_default(key_prefix, option_keys)
     selected_key = st.session_state.get(f"{key_prefix}_fault_source", default_key)
     if selected_key not in option_keys:
         selected_key = default_key
@@ -286,6 +299,205 @@ def build_nearby_fault_tower_table(map_df: pd.DataFrame, distance_km: float, win
     return nearby_df[helper_columns + original_columns].reset_index(drop=True)
 
 
+# Kolom yang dikonsumsi oleh badge proteksi (tidak ditampilkan sebagai kolom tabel)
+_PROTECTION_BADGE_COLS = frozenset([
+    "CLEANING ISOLATOR L1", "TANGGAL CLEANING L1", "CLEANING ISOLATOR L2", "TANGGAL CLEANING L2",
+    "PROTEKSI PETIR", "DGS", "TANGGAL PASANG DGS", "MGGS", "TANGGAL PASANG MGGS",
+    "TLA/NGLA", "EGLA", "TANGGAL PASANG EGLA", "JUMLAH PROTEKSI PETIR",
+    "SUMUR BOR", "TANGGAL PASANG SUMUR BOR", "MDG", "TANGGAL PASANG MDG",
+    "DMRG TIPE A", "DMRG TIPE B", "DMRG TIPE C", "TANGGAL PASANG DMRG",
+    "MRG", "TANGGAL PASANG MRG", "DG", "TANGGAL PASANG DG",
+    "DINDING PENAHAN TANAH", "BALOK KOPEL", "BRONJONG", "DINDING BATU KALI",
+    "SHEET PILE", "SHOTCRETE + SOIL NAILING", "TOTAL DPT",
+    "KERAWAN BINATANG", "KERAWANAN BINATANG", "BURUNG", "KERA", "ULAR", "TOTAL KERAWANAN",
+    "PROTEKSI BINATANG", "JARING", "TOGAR ABES", "KAWAT DURI",
+    "TERASI KAPUR BARUS", "TOTAL PROTEKSI BINATANG",
+])
+
+# Kolom yang disembunyikan dari tabel (tidak ditampilkan, tidak jadi badge)
+_NEARBY_HIDDEN_COLS = frozenset([
+    "Fault Context", "Distance from Fault km",
+    "JARAK km", "KUMULATIF km", "JARAK", "KUMULATIF",
+    "LATITUDE", "LONGITUDE", "SEGMENT", "ULTG",
+])
+
+# Kolom utama yang ditampilkan sebagai kolom tabel
+_NEARBY_CORE_COLS = ["SPAN", "TYPE STRING", "JUMLAH STRING"]
+
+
+def _protection_badge(label: str, bg: str, text_color: str = "#fff", date: str = "") -> str:
+    safe_label = html.escape(label)
+    date_part = ""
+    if date and date.lower() not in ("n/a", "nan", "none", "0", "", "-"):
+        safe_date = html.escape(date)
+        date_part = f'<span style="display:block;font-size:9px;font-weight:400;opacity:0.88;line-height:1.3">{safe_date}</span>'
+    padding = "2px 8px 3px" if date_part else "3px 8px"
+    return (
+        f'<span style="background:{bg};color:{text_color};padding:{padding};border-radius:10px;'
+        f'font-size:11px;font-weight:600;white-space:nowrap;margin:2px 2px;'
+        f'display:inline-block;line-height:1.5;vertical-align:middle">'
+        f'{safe_label}{date_part}</span>'
+    )
+
+
+def _fmt_date(raw: str) -> str:
+    v = str(raw or "").strip()
+    if not v or v.lower() in ("n/a", "nan", "none", "0", "-", ""):
+        return ""
+    return v
+
+
+def _build_protection_badges(row: pd.Series) -> str:
+    def val(col):
+        return str(row.get(col, "") or "").strip()
+
+    def is_ada(col):
+        return val(col).lower() == "ada"
+
+    def is_sudah_cleaning(col):
+        return "sudah" in val(col).lower()
+
+    def nonzero(col):
+        try:
+            return float(val(col)) > 0
+        except (ValueError, TypeError):
+            return False
+
+    badges = []
+
+    # Cleaning isolator — hijau
+    for lyr, col, date_col in [
+        ("Cleaning L1", "CLEANING ISOLATOR L1", "TANGGAL CLEANING L1"),
+        ("Cleaning L2", "CLEANING ISOLATOR L2", "TANGGAL CLEANING L2"),
+    ]:
+        if is_sudah_cleaning(col):
+            badges.append(_protection_badge(lyr, "#16a34a", date=_fmt_date(val(date_col))))
+
+    # Proteksi petir beserta seluruh sub-device — kuning tua
+    # "Proteksi Petir" generik hanya muncul jika tidak ada satu pun sub-device yang terisi
+    petir_subdevices = [
+        ("DGS",     "DGS",        "TANGGAL PASANG DGS"),
+        ("MGGS",    "MGGS",       "TANGGAL PASANG MGGS"),
+        ("TLA/NGLA","TLA/NGLA",   ""),
+        ("EGLA",    "EGLA",       "TANGGAL PASANG EGLA"),
+        ("Sumur Bor","SUMUR BOR", "TANGGAL PASANG SUMUR BOR"),
+        ("MDG",     "MDG",        "TANGGAL PASANG MDG"),
+        ("MRG",     "MRG",        "TANGGAL PASANG MRG"),
+        ("DG",      "DG",         "TANGGAL PASANG DG"),
+        ("DMRG-A",  "DMRG TIPE A","TANGGAL PASANG DMRG"),
+        ("DMRG-B",  "DMRG TIPE B","TANGGAL PASANG DMRG"),
+        ("DMRG-C",  "DMRG TIPE C","TANGGAL PASANG DMRG"),
+    ]
+    petir_found = [
+        _protection_badge(lbl, "#d97706", date=_fmt_date(val(dc)) if dc else "")
+        for lbl, col, dc in petir_subdevices if nonzero(col)
+    ]
+    if petir_found:
+        badges.extend(petir_found)
+    elif is_ada("PROTEKSI PETIR"):
+        badges.append(_protection_badge("Proteksi Petir", "#d97706"))
+
+    # Dinding Penahan Tanah — coklat
+    for lbl, col in [
+        ("Din. Penahan", "DINDING PENAHAN TANAH"), ("Balok Kopel", "BALOK KOPEL"),
+        ("Bronjong", "BRONJONG"), ("Batu Kali", "DINDING BATU KALI"),
+        ("Sheet Pile", "SHEET PILE"), ("Shotcrete", "SHOTCRETE + SOIL NAILING"),
+    ]:
+        if nonzero(col):
+            badges.append(_protection_badge(lbl, "#92400e"))
+
+    # Kerawanan binatang — merah (peringatan, bukan proteksi)
+    found_animals = [a for a, c in [("Burung", "BURUNG"), ("Kera", "KERA"), ("Ular", "ULAR")] if nonzero(c)]
+    if found_animals:
+        badges.append(_protection_badge("⚠ " + "/".join(found_animals), "#dc2626"))
+
+    # Proteksi binatang — ungu
+    bio_found = []
+    for lbl, col in [
+        ("Jaring", "JARING"), ("Togar Abes", "TOGAR ABES"),
+        ("Kawat Duri", "KAWAT DURI"), ("Terasi Kapur", "TERASI KAPUR BARUS"),
+    ]:
+        if nonzero(col):
+            bio_found.append(_protection_badge(lbl, "#7c3aed"))
+    if bio_found:
+        badges.extend(bio_found)
+    elif is_ada("PROTEKSI BINATANG"):
+        badges.append(_protection_badge("Proteksi Binatang", "#7c3aed"))
+
+    if not badges:
+        return '<span style="color:#9ca3af;font-size:12px">—</span>'
+    return "".join(badges)
+
+
+def render_nearby_tower_table_html(df: pd.DataFrame) -> str:
+    # Kolom yang ditampilkan: core + kolom ekstra (bukan badge, bukan hidden)
+    known_hide = _PROTECTION_BADGE_COLS | _NEARBY_HIDDEN_COLS | {"lat", "lon", "_cum_km"}
+    display_cols = [c for c in _NEARBY_CORE_COLS if c in df.columns]
+    extra_cols = [c for c in df.columns if c not in known_hide and c not in display_cols and not str(c).startswith("_")]
+    all_cols = display_cols + extra_cols
+
+    # Warna latar baris berdasarkan Fault Context
+    _row_bg = {
+        "Before fault span": "#fee2e2",
+        "After fault span": "#fee2e2",
+        "Closest tower": "#fef3c7",
+    }
+
+    th = 'style="padding:5px 10px;text-align:left;font-size:11px;font-weight:700;color:#374151;background:#f3f4f6;border-bottom:2px solid #e5e7eb;white-space:nowrap"'
+    td_base = "padding:4px 10px;font-size:12px;border-bottom:1px solid #f3f4f6;vertical-align:middle;white-space:nowrap"
+    td_badge = "padding:4px 10px;font-size:12px;border-bottom:1px solid #f3f4f6;vertical-align:middle"
+
+    # Header
+    header_html = "<tr>"
+    header_html += f"<th {th} style='padding:5px 10px;text-align:left;font-size:11px;font-weight:700;color:#374151;background:#f3f4f6;border-bottom:2px solid #e5e7eb;width:32px'>No</th>"
+    for col in all_cols:
+        header_html += f"<th {th}>{html.escape(str(col))}</th>"
+    header_html += f"<th {th} style='padding:5px 10px;text-align:left;font-size:11px;font-weight:700;color:#374151;background:#f3f4f6;border-bottom:2px solid #e5e7eb;min-width:220px'>Proteksi Terpasang</th>"
+    header_html += "</tr>"
+
+    # Rows
+    rows_html = ""
+    for i, (_, row) in enumerate(df.iterrows(), 1):
+        ctx = str(row.get("Fault Context", ""))
+        bg = _row_bg.get(ctx, "#ffffff")
+        td = f'style="{td_base};background:{bg}"'
+        td_b = f'style="{td_badge};background:{bg}"'
+
+        rows_html += "<tr>"
+        rows_html += f'<td {td}><span style="color:#9ca3af">{i}</span></td>'
+
+        for col in all_cols:
+            v = row.get(col)
+            v_str = "" if v is None or (isinstance(v, float) and math.isnan(v)) else str(v)
+            cell = html.escape(v_str) if v_str else "—"
+            rows_html += f"<td {td}>{cell}</td>"
+
+        badges = _build_protection_badges(row)
+        rows_html += f"<td {td_b}>{badges}</td>"
+        rows_html += "</tr>"
+
+    legend = (
+        '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:4px;align-items:center">'
+        '<span style="font-size:11px;color:#6b7280;font-weight:600;margin-right:4px">Legenda:</span>'
+        + _protection_badge("Cleaning", "#16a34a")
+        + _protection_badge("Proteksi Petir", "#d97706")
+        + _protection_badge("Dinding Penahan", "#92400e")
+        + _protection_badge("⚠ Kerawanan Binatang", "#dc2626")
+        + _protection_badge("Proteksi Binatang", "#7c3aed")
+        + "</div>"
+    )
+
+    return (
+        '<div style="overflow-x:auto;font-family:sans-serif;margin-top:4px">'
+        f'<table style="width:100%;border-collapse:collapse">'
+        f"<thead>{header_html}</thead>"
+        f"<tbody>{rows_html}</tbody>"
+        "</table>"
+        f"{legend}"
+        "</div>"
+    )
+
+
 def render_tower_map(
     tower_df: pd.DataFrame,
     key_prefix: str,
@@ -334,6 +546,7 @@ def render_tower_map(
                 )
                 option_keys = [option["key"] for option in fault_options]
                 default_key = "de" if "de" in option_keys else option_keys[0]
+                _sync_fault_source_default(key_prefix, option_keys)
                 selected_fault_key = st.selectbox(
                     "Sumber fault",
                     option_keys,
@@ -678,23 +891,6 @@ def render_tower_map(
             with st.expander("Data tower sekitar titik gangguan (-5 / +5)", expanded=focus_on_fault):
                 st.caption(
                     "Tabel ini menampilkan 5 tower sebelum dan 5 tower sesudah span lokasi gangguan "
-                    "berdasarkan urutan KUMULATIF km. Semua kolom yang tersedia dari spreadsheet tetap ditampilkan."
+                    "berdasarkan urutan KUMULATIF km. Kolom proteksi digabung menjadi label per tower."
                 )
-                nearby_formatters = {
-                    "Distance from Fault km": "{:.3f}",
-                    "JARAK km": "{:.2f}",
-                    "KUMULATIF km": "{:.2f}",
-                }
-                nearby_formatters = {
-                    key: formatter
-                    for key, formatter in nearby_formatters.items()
-                    if key in nearby_tower_df.columns
-                }
-                if nearby_formatters:
-                    st.dataframe(
-                        nearby_tower_df.style.format(nearby_formatters, na_rep="-"),
-                        use_container_width=True,
-                        height=360,
-                    )
-                else:
-                    st.dataframe(nearby_tower_df, use_container_width=True, height=360)
+                st.html(render_nearby_tower_table_html(nearby_tower_df))

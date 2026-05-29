@@ -41,7 +41,6 @@ CASE_STATE_EXCLUDE_PREFIXES = (
     "local_dat_file",
     "remote_cfg_file",
     "remote_dat_file",
-    "summary_weather_lightning_openweather",
     "summary_weather_lightning_xweather",
 )
 CASE_STATE_EXCLUDE_KEYS = {
@@ -53,10 +52,67 @@ CASE_STATE_EXCLUDE_KEYS = {
     "runtime_credentials",
     "runtime_credentials_loaded_name",
     "runtime_gdrive_service_account",
-    "openweather_lightning_api_key",
     "xweather_client_id",
     "xweather_client_secret",
     "accuweather_api_key",
+}
+
+# Kunci-kunci ini SELALU disimpan ke case ZIP dan dipulihkan saat restore,
+# terlepas dari exclude list. Mencakup pengaturan DB, signal assignment, dan line data.
+CASE_SETTINGS_KEYS = frozenset([
+    # OpenWeather API key
+    "openweather_lightning_api_key",
+    "summary_weather_lightning_openweather_api_key_input",
+    # DB Setup — URL spreadsheet dan sheet names
+    "database_spreadsheet_url",
+    "line_data_sheet_name",
+    "cable_data_sheet_name",
+    "distance_settings_sheet_name",
+    "tower_schedule_url",
+    "tower_schedule_sheet_name",
+    # Widget input keys DB Setup (agar field langsung terisi saat restore)
+    "database_spreadsheet_url_input",
+    "tower_schedule_url_setup_input",
+    "tower_schedule_sheet_setup_input",
+    # Signal Assignment — Local End
+    "local_signal_va",
+    "local_signal_vb",
+    "local_signal_vc",
+    "local_signal_ia",
+    "local_signal_ib",
+    "local_signal_ic",
+    "local_signal_ie",
+    "local_signal_recorded_side",
+    "local_signal_ct_primary",
+    "local_signal_ct_secondary",
+    "local_signal_vt_primary",
+    "local_signal_vt_secondary",
+    "local_transformer_data",
+    # Signal Assignment — Remote End
+    "remote_va_channel",
+    "remote_vb_channel",
+    "remote_vc_channel",
+    "remote_ia_channel",
+    "remote_ib_channel",
+    "remote_ic_channel",
+    "remote_ie_channel",
+    "remote_recorded_side",
+    "remote_ct_primary",
+    "remote_ct_secondary",
+    "remote_vt_primary",
+    "remote_vt_secondary",
+    "remote_transformer_data",
+    # Line Data
+    "line_param",
+    "line_param_df",
+])
+
+# Peta fallback: jika widget key tidak ada di snapshot, ambil dari value key.
+# Dipakai saat restore untuk mengisi field UI dari value yang tersimpan.
+_CASE_SETTINGS_WIDGET_FALLBACK = {
+    "database_spreadsheet_url_input": "database_spreadsheet_url",
+    "tower_schedule_url_setup_input": "tower_schedule_url",
+    "tower_schedule_sheet_setup_input": "tower_schedule_sheet_name",
 }
 
 
@@ -302,6 +358,10 @@ def build_case_state_snapshot():
         if any(str(key).startswith(prefix) for prefix in CASE_STATE_EXCLUDE_PREFIXES):
             continue
         snapshot[str(key)] = make_case_json_safe(value)
+    # CASE_SETTINGS_KEYS selalu disimpan — override exclude list jika perlu
+    for key in CASE_SETTINGS_KEYS:
+        if key not in snapshot and key in st.session_state:
+            snapshot[key] = make_case_json_safe(st.session_state[key])
     return snapshot
 
 
@@ -349,6 +409,11 @@ def restore_case_archive(archive_bytes: bytes):
             if file_info and file_info.get("path") in archive.namelist():
                 st.session_state[name_key] = file_info.get("name", fallback_name)
                 st.session_state[bytes_key] = archive.read(file_info["path"])
+    # Fallback: isi widget input key dari value key jika tidak ada di snapshot
+    # (misal case lama yang belum menyimpan widget keys)
+    for widget_key, value_key in _CASE_SETTINGS_WIDGET_FALLBACK.items():
+        if widget_key not in st.session_state and value_key in st.session_state:
+            st.session_state[widget_key] = st.session_state[value_key]
     st.session_state["case_restore_message"] = "Case berhasil dimuat. Aplikasi memakai file dan parameter dari arsip case."
 
 

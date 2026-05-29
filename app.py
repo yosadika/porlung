@@ -65,6 +65,7 @@ from single_ended import (
 )
 from app_helpers import (
     MAX_PLOT_POINTS,
+    OHM,
     validate_uploaded_extension,
     downsample_dataframe_for_plot,
     make_streamlit_safe_columns,
@@ -539,27 +540,30 @@ install_print_friendly_tables()
 
 st.title("Transmission Fault Locator")
 
-st.sidebar.header("Upload Local End COMTRADE")
+with st.sidebar.expander("Upload Local End COMTRADE", expanded=False):
+    cfg_file = st.file_uploader("Local .cfg", key="local_cfg_file")
+    dat_file = st.file_uploader("Local .dat", key="local_dat_file")
 
-cfg_file = st.sidebar.file_uploader("Local .cfg", key="local_cfg_file")
-dat_file = st.sidebar.file_uploader("Local .dat", key="local_dat_file")
-
-st.sidebar.divider()
-st.sidebar.header("Upload Remote End COMTRADE")
-st.sidebar.caption("Opsional. Diisi jika ingin menghitung double-ended.")
-remote_cfg_file = st.sidebar.file_uploader("Remote .cfg", key="remote_cfg_file")
-remote_dat_file = st.sidebar.file_uploader("Remote .dat", key="remote_dat_file")
+with st.sidebar.expander("Upload Remote End COMTRADE", expanded=False):
+    st.caption("Opsional. Diisi jika ingin menghitung double-ended.")
+    remote_cfg_file = st.file_uploader("Remote .cfg", key="remote_cfg_file")
+    remote_dat_file = st.file_uploader("Remote .dat", key="remote_dat_file")
 
 st.sidebar.divider()
 st.sidebar.header("Case Storage")
 case_archive_file = st.sidebar.file_uploader("Load Case (.zip)", type=["zip"], key="case_archive_file")
 if case_archive_file is not None:
-    try:
-        restore_case_archive(case_archive_file.getvalue())
-        st.rerun()
-    except Exception as e:
-        st.sidebar.error("Case gagal dimuat.")
-        st.sidebar.exception(e)
+    import hashlib as _hashlib
+    _archive_bytes = case_archive_file.getvalue()
+    _archive_hash = _hashlib.md5(_archive_bytes).hexdigest()
+    if st.session_state.get("_restored_case_hash") != _archive_hash:
+        try:
+            restore_case_archive(_archive_bytes)
+            st.session_state["_restored_case_hash"] = _archive_hash
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error("Case gagal dimuat.")
+            st.sidebar.exception(e)
 
 cfg_file = cfg_file or get_restored_upload("local_cfg")
 dat_file = dat_file or get_restored_upload("local_dat")
@@ -1788,56 +1792,20 @@ with tab0:
         "Simpan rekaman COMTRADE, parameter yang sudah diubah, dan hasil kalkulasi sebagai satu arsip case. "
         "Arsip ini bisa di-load kembali dari sidebar tanpa mengatur ulang workflow dari awal."
     )
-    case_col1, case_col2 = st.columns([2, 3])
-    with case_col1:
-        case_name_input = st.text_input(
-            "Case Name",
-            value=st.session_state.get("case_name", st.session_state.get("line_param", {}).get("line_name", "fault_case")),
-            key="case_name_input",
-        ).strip()
-        st.session_state["case_name"] = case_name_input or "fault_case"
-    with case_col2:
-        drive_folder_input = st.text_input(
-            "Google Drive Folder URL / ID",
-            value=st.session_state.get("case_drive_folder_url", ""),
-            key="case_drive_folder_url_input",
-        ).strip()
-        st.session_state["case_drive_folder_url"] = drive_folder_input
-        st.session_state["case_drive_folder_id"] = extract_google_drive_folder_id(st.session_state["case_drive_folder_url"])
 
-    case_filename, case_archive_bytes = build_case_archive_bytes(st.session_state.get("case_name", "fault_case"))
-    storage_col1, storage_col2 = st.columns([1, 1])
-    with storage_col1:
-        st.download_button(
-            "Export Case ZIP",
-            data=case_archive_bytes,
-            file_name=case_filename,
-            mime="application/zip",
-            key="export_case_zip",
-        )
-    with storage_col2:
-        if st.button("Save Case to Google Drive", key="save_case_to_google_drive"):
-            try:
-                uploaded_file = upload_case_archive_to_drive(
-                    case_filename,
-                    case_archive_bytes,
-                    st.session_state.get("case_drive_folder_id", ""),
-                )
-                st.success(f"Case berhasil disimpan ke Google Drive: {uploaded_file.get('name')}")
-                if uploaded_file.get("webViewLink"):
-                    st.markdown(f"[Buka file di Google Drive]({uploaded_file['webViewLink']})")
-            except Exception as e:
-                st.error("Belum bisa menyimpan ke Google Drive.")
-                st.exception(e)
-                st.info(
-                    "Pastikan dependency Google Drive sudah terpasang, kredensial service account tersedia, "
-                    "dan folder Drive sudah di-share ke email service account tersebut."
-                )
+    _line_name = st.session_state.get("line_param", {}).get("line_name", "") or "case"
+    _line_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", _line_name).strip("_") or "case"
+    _auto_case_name = f"porlungcase_{_line_slug}"
+    st.session_state["case_name"] = _auto_case_name
 
-    st.caption(
-        "Untuk mode Drive, isi folder melalui runtime credentials, Streamlit secrets, environment variable, "
-        "atau input manual. Gunakan service account melalui runtime credentials, `st.secrets['gdrive_service_account']`, "
-        "atau environment variable `GOOGLE_APPLICATION_CREDENTIALS`."
+    case_filename, case_archive_bytes = build_case_archive_bytes(_auto_case_name)
+    st.caption(f"File akan disimpan sebagai: `{case_filename}`")
+    st.download_button(
+        "Export Case ZIP",
+        data=case_archive_bytes,
+        file_name=case_filename,
+        mime="application/zip",
+        key="export_case_zip",
     )
 
 
@@ -3580,7 +3548,7 @@ def render_high_resistance_check(end_side: str):
         col_a.metric("Location", ctx["label"])
         col_b.metric("Selected Loop", hr_result["selected_loop"])
         col_c.metric("High Resistance", "Suspected" if hr_result["high_resistance_suspected"] else "No")
-        col_d.metric("Rf Estimate", f'{hr_result["Rf_est_ohm"]:.3f} Î©')
+        col_d.metric("Rf Estimate", f'{hr_result["Rf_est_ohm"]:.3f} {OHM}')
         col_e.metric("Analysis Confidence", f'{hr_result["analysis_confidence"]}/10')
 
         if hr_result["high_resistance_suspected"]:
@@ -3712,7 +3680,7 @@ def render_single_ended_analysis(end_side: str):
     col_r1.metric("End", ctx["label"])
     col_r2.metric("Signed Distance" if single_external_context else "Recommended Distance", f'{single_result["recommended_distance_km"]:.3f} km')
     col_r3.metric("Distance %", f'{single_result["recommended_distance_percent"]:.2f} %')
-    col_r4.metric("Zapp", f'{single_result["Zapp_R"]:.3f} + j{single_result["Zapp_X"]:.3f} Î©')
+    col_r4.metric("Zapp", f'{single_result["Zapp_R"]:.3f} + j{single_result["Zapp_X"]:.3f} {OHM}')
     col_r5.metric("Status", single_result["status"])
 
     if single_result["status"] == "VALID":

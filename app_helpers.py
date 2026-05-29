@@ -7,6 +7,8 @@ import streamlit as st
 
 MAX_PLOT_POINTS = 6000
 
+OHM = chr(0x03A9)
+
 
 def downsample_xy(x_values, y_values, max_points: int = MAX_PLOT_POINTS):
     length = len(x_values)
