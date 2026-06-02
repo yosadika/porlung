@@ -216,6 +216,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Indikator HR: `Rf_est >= threshold`, deviasi sudut Zapp terhadap Z1, deviasi distance magnitude vs reactance, distance keluar line.
 - Confidence 0–10 dan evidence score ditampilkan.
 - Simbol ohm harus tampil sebagai `Ω`, bukan karakter rusak.
+- Formula expander `render_hr_formula_expander()` menampilkan: loop impedansi, Zapp, tiga metode jarak, estimasi Rf, deviasi sudut, dan logika deteksi HR dengan nilai aktual inline.
 
 ---
 
@@ -251,7 +252,9 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Quality score: penalti distance negatif/> line length/imaginary, penalti mismatch tegangan, dikunci 0–10.
 - Remote adaptation: `auto_adapt_record`, `auto_current_direction_only`, manual `into_line`, manual `opposite_to_line`.
 - Candidate ranking: distance keluar line, imaginary distance, mismatch ratio, quality score, penalti angle shift, penalti polaritas/arah tertentu.
-- Visual sync: **referensi default `fault_cursor` (Fault cursor only)**, **metode default RMS envelope magnitude**, opsi sinkronisasi fault cursor/time/visual. Fault inception untuk alignment, DFT cursor untuk kalkulasi phasor.
+- Visual sync: **referensi default `fault_phase_voltage` (jika tersedia, fallback `fault_cursor`)**, **metode default raw waveform correlation**, opsi sinkronisasi fault cursor/time/visual. Fault inception untuk alignment, DFT cursor untuk kalkulasi phasor.
+- Grafik sync waveform: default menampilkan **tegangan dan arus fasa terganggu** sekaligus. Tegangan di subplot atas (Y: Tegangan Primary), arus di subplot bawah (Y: Arus Primary), X axis shared. `build_synchronized_fault_plot` mendukung `current_channels` parameter untuk layout dual subplot.
+- **Visual Sync Quality** ditampilkan setelah grafik sync: 5 metrik (DE Remote DFT Time, DE Remote DFT Index, Waveform Sync Score, Visual Sync Score, Sync Status). Visual Sync Score = Pearson correlation instantaneous waveform tegangan fasa terganggu di 2 siklus sekitar DFT cursor setelah alignment. Threshold: ≥0.85 Sinkron, 0.50–0.85 Cukup Sinkron, <0.50 Kurang Sinkron, <0 Terbalik/Tidak Sinkron.
 - Optional TWS/time-based: `distance_from_local = (L + v * delta_t) / 2`, warning bila delta time/distance tidak realistis.
 - Scenario: internal line fault atau reverse/backfeed/external fault. SOTF/parallel/adjacent line diperlakukan sebagai konteks reverse/backfeed, bukan label wajib.
 - Perbandingan SE pada halaman DE memakai line parameter efektif yang sama; jika DE memakai Tower Schedule, SE comparison juga memakai panjang Tower Schedule.

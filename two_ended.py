@@ -262,7 +262,7 @@ def choose_best_two_ended_adaptation(
     local_phasors,
     remote_phasors,
     line_param,
-    angle_step_deg: float = 1.0,
+    angle_step_deg: float = 5.0,
 ):
     """
     Mencari kombinasi pembacaan remote yang paling konsisten.
@@ -274,19 +274,25 @@ def choose_best_two_ended_adaptation(
     - offset sudut umum antar rekaman.
     """
 
-    coarse_candidates = []
     directions = ["into_line", "opposite_to_line"]
     polarities = [-1, 1]
     angle_count = max(1, int(round(360.0 / angle_step_deg)))
-    angles = [
+    angles_raw = [
         -180.0 + i * (360.0 / angle_count)
         for i in range(angle_count)
     ]
+    # Mulai dari sudut terkecil agar rekaman tersinkronisasi menemukan jawaban lebih cepat
+    angles = sorted(angles_raw, key=abs)
 
-    for direction in directions:
-        for voltage_polarity in polarities:
-            for current_polarity in polarities:
-                for angle_shift_deg in angles:
+    coarse_candidates = []
+    best_score_so_far = float("inf")
+    # Threshold: distance in-range + imag + mismatch kecil → tidak perlu cari sudut lebih jauh
+    _EARLY_EXIT_THRESHOLD = 10.0
+
+    for angle_shift_deg in angles:
+        for direction in directions:
+            for voltage_polarity in polarities:
+                for current_polarity in polarities:
                     try:
                         candidate = _calculate_adapted_candidate(
                             local_phasors=local_phasors,
@@ -298,6 +304,8 @@ def choose_best_two_ended_adaptation(
                             angle_shift_deg=angle_shift_deg,
                         )
                         coarse_candidates.append(candidate)
+                        if candidate["ranking_score"] < best_score_so_far:
+                            best_score_so_far = candidate["ranking_score"]
                     except Exception as e:
                         coarse_candidates.append(
                             {
@@ -312,34 +320,41 @@ def choose_best_two_ended_adaptation(
                                 "error": str(e),
                             }
                         )
+        if best_score_so_far < _EARLY_EXIT_THRESHOLD:
+            break
 
     valid_candidates = [c for c in coarse_candidates if c["result"] is not None]
 
-    refined_candidates = []
-    for coarse in sorted(valid_candidates, key=lambda x: x["ranking_score"])[:8]:
-        center = coarse["angle_shift_deg"]
-        fine_step = max(0.25, angle_step_deg / 10.0)
-        for fine_i in range(-10, 11):
-            angle_shift_deg = center + fine_i * fine_step
-            if angle_shift_deg > 180.0:
-                angle_shift_deg -= 360.0
-            elif angle_shift_deg <= -180.0:
-                angle_shift_deg += 360.0
+    best_coarse_score = min(
+        (c["ranking_score"] for c in valid_candidates), default=float("inf")
+    )
 
-            try:
-                refined_candidates.append(
-                    _calculate_adapted_candidate(
-                        local_phasors=local_phasors,
-                        remote_phasors=remote_phasors,
-                        line_param=line_param,
-                        remote_current_direction=coarse["remote_current_direction"],
-                        voltage_polarity=coarse["voltage_polarity"],
-                        current_polarity=coarse["current_polarity"],
-                        angle_shift_deg=angle_shift_deg,
+    refined_candidates = []
+    if best_coarse_score >= _EARLY_EXIT_THRESHOLD:
+        for coarse in sorted(valid_candidates, key=lambda x: x["ranking_score"])[:8]:
+            center = coarse["angle_shift_deg"]
+            fine_step = max(0.25, angle_step_deg / 10.0)
+            for fine_i in range(-10, 11):
+                angle_shift_deg = center + fine_i * fine_step
+                if angle_shift_deg > 180.0:
+                    angle_shift_deg -= 360.0
+                elif angle_shift_deg <= -180.0:
+                    angle_shift_deg += 360.0
+
+                try:
+                    refined_candidates.append(
+                        _calculate_adapted_candidate(
+                            local_phasors=local_phasors,
+                            remote_phasors=remote_phasors,
+                            line_param=line_param,
+                            remote_current_direction=coarse["remote_current_direction"],
+                            voltage_polarity=coarse["voltage_polarity"],
+                            current_polarity=coarse["current_polarity"],
+                            angle_shift_deg=angle_shift_deg,
+                        )
                     )
-                )
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
     candidates = sorted(
         valid_candidates + refined_candidates,

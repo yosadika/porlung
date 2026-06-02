@@ -95,6 +95,7 @@ from fault_workflow_helpers import (
     explain_sync_warning,
     render_fault_cursor,
     render_se_formula_expander,
+    render_hr_formula_expander,
 )
 from case_storage import (
     DEFAULT_CASE_DRIVE_FOLDER_URL,
@@ -1167,11 +1168,17 @@ with tab_remote:
                 key="remote_assigned_waveform_display_mode",
             )
             remote_waveform_frequency = float(remote_metadata.get("frequency") or 50.0)
-            remote_rms_summary_df = build_waveform_rms_summary(
-                remote_assigned_df,
-                remote_waveform_channels,
-                frequency=remote_waveform_frequency,
-            )
+            _rw_rms_key = (tuple(remote_waveform_channels), remote_waveform_frequency, len(remote_assigned_df))
+            if st.session_state.get("_rw_rms_key") != _rw_rms_key:
+                remote_rms_summary_df = build_waveform_rms_summary(
+                    remote_assigned_df,
+                    remote_waveform_channels,
+                    frequency=remote_waveform_frequency,
+                )
+                st.session_state["_rw_rms_df"] = remote_rms_summary_df
+                st.session_state["_rw_rms_key"] = _rw_rms_key
+            else:
+                remote_rms_summary_df = st.session_state["_rw_rms_df"]
             if not remote_rms_summary_df.empty:
                 with st.expander("Remote RMS vs Peak Awal Rekaman", expanded=False):
                     st.dataframe(
@@ -1185,13 +1192,19 @@ with tab_remote:
                         use_container_width=True,
                     )
             if remote_waveform_channels:
-                remote_assigned_fig, remote_waveform_caption = build_assigned_waveform_plot(
-                    remote_assigned_df,
-                    remote_waveform_channels,
-                    f"Remote Waveform {remote_waveform_group} - {remote_waveform_display_mode}",
-                    remote_waveform_display_mode,
-                    frequency=remote_waveform_frequency,
-                )
+                _rw_fig_key = (tuple(remote_waveform_channels), remote_waveform_display_mode, remote_waveform_frequency, len(remote_assigned_df))
+                if st.session_state.get("_rw_fig_key") != _rw_fig_key:
+                    remote_assigned_fig, remote_waveform_caption = build_assigned_waveform_plot(
+                        remote_assigned_df,
+                        remote_waveform_channels,
+                        f"Remote Waveform {remote_waveform_group} - {remote_waveform_display_mode}",
+                        remote_waveform_display_mode,
+                        frequency=remote_waveform_frequency,
+                    )
+                    st.session_state["_rw_fig"] = (remote_assigned_fig, remote_waveform_caption)
+                    st.session_state["_rw_fig_key"] = _rw_fig_key
+                else:
+                    remote_assigned_fig, remote_waveform_caption = st.session_state["_rw_fig"]
                 st.caption(remote_waveform_caption)
                 st.plotly_chart(remote_assigned_fig, use_container_width=True)
 
@@ -2626,7 +2639,18 @@ with summary_container:
     st.caption(estimated_cause_note)
 
     st.markdown("### Grafik SE dan DE")
-    summary_location_fig = build_summary_line_position_from_session()
+    _sloc_key = (
+        (st.session_state.get("two_ended_result") or {}).get("distance_km"),
+        (st.session_state.get("two_ended_quality") or {}).get("quality_score"),
+        (st.session_state.get("single_ended_result") or {}).get("recommended_distance_km"),
+        (st.session_state.get("line_param") or {}).get("length_km"),
+    )
+    if st.session_state.get("_sloc_key") != _sloc_key or "summary_location_fig_cached" not in st.session_state:
+        summary_location_fig = build_summary_line_position_from_session()
+        st.session_state["summary_location_fig_cached"] = summary_location_fig
+        st.session_state["_sloc_key"] = _sloc_key
+    else:
+        summary_location_fig = st.session_state["summary_location_fig_cached"]
     if summary_location_fig is not None:
         st.plotly_chart(
             summary_location_fig,
@@ -2674,7 +2698,29 @@ with summary_container:
     )
 
     def show_summary_rx_locus(end_suffix: str, fallback_label: str):
-        fig, _, meta, build_warning = build_rx_locus_figure_from_session(end_suffix)
+        _fw_key = "fault_window" if end_suffix == "local" else "remote_fault_window"
+        _rx_key = (
+            end_suffix,
+            st.session_state.get(f"rx_locus_loop_{end_suffix}", ""),
+            float(st.session_state.get(f"rx_locus_pre_{end_suffix}", 2.0)),
+            float(st.session_state.get(f"rx_locus_post_{end_suffix}", 8.0)),
+            st.session_state.get(f"rx_locus_density_{end_suffix}", "1/4 cycle"),
+            int((st.session_state.get(_fw_key) or {}).get("dft_index", 0)),
+            float((st.session_state.get("line_param") or {}).get("length_km", 0)),
+        )
+        _rx_cache = st.session_state.get("_summary_rx_cache", {})
+        if _rx_cache.get(end_suffix + "_k") == _rx_key:
+            fig = _rx_cache[end_suffix + "_fig"]
+            meta = _rx_cache[end_suffix + "_meta"]
+            build_warning = _rx_cache[end_suffix + "_warn"]
+        else:
+            fig, _, meta, build_warning = build_rx_locus_figure_from_session(end_suffix)
+            _rx_cache[end_suffix + "_k"] = _rx_key
+            _rx_cache[end_suffix + "_fig"] = fig
+            _rx_cache[end_suffix + "_meta"] = meta
+            _rx_cache[end_suffix + "_warn"] = build_warning
+            st.session_state["_summary_rx_cache"] = _rx_cache
+
         if fig is None:
             st.info(
                 build_warning
@@ -2751,11 +2797,18 @@ with tab3:
         "sedangkan puncak instantaneous normal sekitar 122.5 kV."
     )
 
-    rms_summary_df = build_waveform_rms_summary(
-        assigned_df,
-        selected_channels,
-        frequency=float(st.session_state.get("fault_detection", {}).get("frequency", metadata.get("frequency") or 50.0)),
-    )
+    _lw_freq = float(st.session_state.get("fault_detection", {}).get("frequency", metadata.get("frequency") or 50.0))
+    _lw_rms_key = (tuple(selected_channels), _lw_freq, len(assigned_df))
+    if st.session_state.get("_lw_rms_key") != _lw_rms_key:
+        rms_summary_df = build_waveform_rms_summary(
+            assigned_df,
+            selected_channels,
+            frequency=_lw_freq,
+        )
+        st.session_state["_lw_rms_df"] = rms_summary_df
+        st.session_state["_lw_rms_key"] = _lw_rms_key
+    else:
+        rms_summary_df = st.session_state["_lw_rms_df"]
 
     if not rms_summary_df.empty:
         with st.expander("Ringkasan RMS vs Peak Awal Rekaman", expanded=False):
@@ -2770,13 +2823,20 @@ with tab3:
                 use_container_width=True,
             )
 
-    fig, waveform_caption = build_assigned_waveform_plot(
-        assigned_df,
-        selected_channels,
-        f"Waveform {selected_group} - {waveform_display_mode}",
-        waveform_display_mode,
-        frequency=float(metadata.get("frequency") or 50.0),
-    )
+    _lw_freq_plot = float(metadata.get("frequency") or 50.0)
+    _lw_fig_key = (tuple(selected_channels), waveform_display_mode, _lw_freq_plot, len(assigned_df))
+    if st.session_state.get("_lw_fig_key") != _lw_fig_key:
+        fig, waveform_caption = build_assigned_waveform_plot(
+            assigned_df,
+            selected_channels,
+            f"Waveform {selected_group} - {waveform_display_mode}",
+            waveform_display_mode,
+            frequency=_lw_freq_plot,
+        )
+        st.session_state["_lw_fig"] = (fig, waveform_caption)
+        st.session_state["_lw_fig_key"] = _lw_fig_key
+    else:
+        fig, waveform_caption = st.session_state["_lw_fig"]
     st.caption(waveform_caption)
 
     st.plotly_chart(fig, use_container_width=True)
@@ -2884,11 +2944,6 @@ with tab5:
         st.session_state["sequence_components"] = sequence
         st.session_state["sequence_df"] = sequence_df
 
-        sequence, sequence_df = calculate_sequence_components(phasors)
-
-        st.session_state["sequence_components"] = sequence
-        st.session_state["sequence_df"] = sequence_df
-
         # Tambahkan komponen simetris ke dictionary phasors
         # agar bisa dipakai oleh Two-Ended Fault Locator
         phasors = add_sequence_components_to_phasor_dict(phasors)
@@ -2987,52 +3042,31 @@ with tab5:
             "Gunakan untuk memeriksa urutan fasa, polaritas, dan sudut antar fasa."
         )
 
+        _ph_key = id(phasors)
+        if st.session_state.get("_phasor_figs_key") != _ph_key:
+            _ph_v = build_wavewin_style_phasor_diagram(phasors, ["Va", "Vb", "Vc"], "Voltage Phasors", line_color="#ff00ff")
+            _ph_i = build_wavewin_style_phasor_diagram(phasors, ["Ia", "Ib", "Ic"], "Current Phasors", line_color="#2563eb")
+            _ph_sv = build_wavewin_style_phasor_diagram(phasors, ["V1", "V2", "V0"], "Voltage Sequence Phasors", line_color="#7c3aed")
+            _ph_si = build_wavewin_style_phasor_diagram(phasors, ["I1", "I2", "I0"], "Current Sequence Phasors", line_color="#d97706")
+            st.session_state["_phasor_figs"] = (_ph_v, _ph_i, _ph_sv, _ph_si)
+            st.session_state["_phasor_figs_key"] = _ph_key
+        else:
+            _ph_v, _ph_i, _ph_sv, _ph_si = st.session_state["_phasor_figs"]
+
         col_v_phasor, col_i_phasor = st.columns(2)
 
         with col_v_phasor:
-            st.plotly_chart(
-                build_wavewin_style_phasor_diagram(
-                    phasors,
-                    ["Va", "Vb", "Vc"],
-                    "Voltage Phasors",
-                    line_color="#ff00ff",
-                ),
-                use_container_width=True,
-            )
+            st.plotly_chart(_ph_v, use_container_width=True)
 
         with col_i_phasor:
-            st.plotly_chart(
-                build_wavewin_style_phasor_diagram(
-                    phasors,
-                    ["Ia", "Ib", "Ic"],
-                    "Current Phasors",
-                    line_color="#2563eb",
-                ),
-                use_container_width=True,
-            )
+            st.plotly_chart(_ph_i, use_container_width=True)
 
         with st.expander("Sequence Component Phasor Diagram"):
             col_seq_v, col_seq_i = st.columns(2)
             with col_seq_v:
-                st.plotly_chart(
-                    build_wavewin_style_phasor_diagram(
-                        phasors,
-                        ["V1", "V2", "V0"],
-                        "Voltage Sequence Phasors",
-                        line_color="#7c3aed",
-                    ),
-                    use_container_width=True,
-                )
+                st.plotly_chart(_ph_sv, use_container_width=True)
             with col_seq_i:
-                st.plotly_chart(
-                    build_wavewin_style_phasor_diagram(
-                        phasors,
-                        ["I1", "I2", "I0"],
-                        "Current Sequence Phasors",
-                        line_color="#d97706",
-                    ),
-                    use_container_width=True,
-                )
+                st.plotly_chart(_ph_si, use_container_width=True)
 
     except Exception as e:
         st.error("Perhitungan fasor gagal.")
@@ -3393,6 +3427,8 @@ def render_high_resistance_check(end_side: str):
         st.info(explain_high_resistance_result(hr_result))
         for warning in hr_result.get("warnings", []):
             st.warning(warning)
+
+        render_hr_formula_expander(hr_result, ctx["line_param"])
 
         st.markdown("### Detail Perhitungan")
         st.dataframe(

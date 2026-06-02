@@ -1224,3 +1224,118 @@ def render_se_formula_expander(result: dict, line_param: dict, key_suffix: str =
                 sup_z = complex(result["superimposed_Zapp_R"], result["superimposed_Zapp_X"])
                 st.markdown(f"**Zapp superimposed (ΔV/ΔI):** `{_fmt_c(sup_z, 'Ω')}`")
 
+
+def render_hr_formula_expander(hr_result: dict, line_param: dict):
+    """Expander berisi rumus HR Check dan nilai aktual yang digunakan."""
+    selected_loop = hr_result.get("selected_loop", "-")
+    zapp = hr_result["Zapp"]
+    z1 = line_param["Z1_per_km"]
+    k0 = line_param["K0"]
+    L = line_param["length_km"]
+    d_x = hr_result["distance_x_km"]
+    d_m = hr_result["distance_mag_km"]
+    d_p = hr_result["distance_projection_km"]
+    rf_est = hr_result["Rf_est_ohm"]
+    residual_z = hr_result["residual_Z"]
+    z_line_est = d_x * z1
+    angle_dev = hr_result["angle_deviation_deg"]
+    z1_angle = hr_result["Z1_angle_deg"]
+    zapp_angle = hr_result["Zapp_angle_deg"]
+    dist_dev = hr_result["distance_deviation_percent"]
+    indicators = hr_result["indicators"]
+
+    loop_latex, is_ground = _SE_LOOP_LATEX.get(
+        selected_loop, (r"Z_{app} = \frac{U_{loop}}{I_{loop}}", False)
+    )
+
+    with st.expander("Rumus dan Pembahasan HR Check", expanded=False):
+
+        st.markdown("#### 1. Impedansi Loop Gangguan")
+        st.latex(loop_latex)
+        if is_ground:
+            st.caption(
+                "K₀ adalah faktor kompensasi earth return: K₀ = (Z₀ − Z₁) / Z₁, "
+                "dengan I₀ = Iᴇ / 3. "
+                "Ekuivalen dengan k₀ = (Z₀ − Z₁) / (3Z₁) × Iᴇ pada notasi standar."
+            )
+        st.markdown(f"**Zapp** = `{_fmt_c(zapp, 'Ω')}`")
+        st.caption("*Referensi: Saha et al. (2010) Eq. 6.3; Phadke & Thorp (2009) Eq. 9.33*")
+
+        st.markdown("#### 2. Nilai yang Digunakan")
+        c1, c2 = st.columns(2)
+        c1.markdown(f"**Z₁/km** = `{_fmt_c(z1, 'Ω/km')}`")
+        c2.markdown(f"**L** = `{L:.6f} km`")
+        if is_ground:
+            c1, c2 = st.columns(2)
+            c1.markdown(f"**K₀** = `{_fmt_c(k0)}`")
+            c2.markdown("*definisi: K₀ = (Z₀ − Z₁) / Z₁*")
+
+        st.markdown("#### 3. Estimasi Jarak — Tiga Metode")
+        st.caption(
+            "Ketiga metode dibandingkan untuk mendeteksi shift resistif akibat Rᶠ tinggi. "
+            "Pada gangguan resistif, magnitude Zapp membesar sehingga d_|Z| > d_X."
+        )
+
+        st.markdown("**Reactance method:**")
+        st.latex(r"d_X = \frac{\mathrm{Im}(Z_{app})}{\mathrm{Im}(Z_1/\mathrm{km})}")
+        st.markdown(
+            f"= {zapp.imag:.4f} / {z1.imag:.4f} = **{d_x:.4f} km** ({d_x / L * 100:.2f}%)"
+        )
+
+        st.markdown("**Magnitude method:**")
+        st.latex(r"d_{|Z|} = \frac{|Z_{app}|}{|Z_1/\mathrm{km}|}")
+        st.markdown(
+            f"= {abs(zapp):.4f} / {abs(z1):.4f} = **{d_m:.4f} km** ({d_m / L * 100:.2f}%)"
+        )
+
+        st.markdown("**Projection method:**")
+        st.latex(r"d_{proj} = \frac{\mathrm{Re}(Z_{app}\cdot\hat{Z}_1^{\,*})}{|Z_1/\mathrm{km}|}")
+        st.markdown(f"= **{d_p:.4f} km** ({d_p / L * 100:.2f}%)")
+
+        flag_div = "⚠ Divergen" if indicators["distance_methods_diverge"] else "✓ Konsisten"
+        st.markdown(
+            f"**Deviasi antar metode (|Z| vs X):** {dist_dev:.2f}% dari panjang saluran — {flag_div}"
+        )
+        st.caption("*Referensi: Saha et al. (2010) Eq. 6.2, 6.22, 6.30–6.31*")
+
+        st.markdown("#### 4. Estimasi Tahanan Gangguan (Rᶠ)")
+        st.latex(r"Z_{line\_est} = d_X \cdot (Z_1/\mathrm{km})")
+        st.markdown(f"= {d_x:.4f} km × `{_fmt_c(z1, 'Ω/km')}` = `{_fmt_c(z_line_est, 'Ω')}`")
+        st.latex(r"R_f = \mathrm{Re}(Z_{app} - Z_{line\_est})")
+        st.markdown(
+            f"= Re(`{_fmt_c(zapp, 'Ω')}` − `{_fmt_c(z_line_est, 'Ω')}`)  \n"
+            f"= Re(`{_fmt_c(residual_z, 'Ω')}`) = **{rf_est:.4f} Ω**"
+        )
+        st.caption(
+            "Estimasi ini memakai d_X sebagai referensi jarak saluran. "
+            "Pada Rᶠ besar, komponen R residual akan dominan dan Zapp bergeser ke kanan R-X plane."
+        )
+
+        st.markdown("#### 5. Deviasi Sudut Impedansi")
+        st.latex(r"\Delta\theta = |\angle Z_{app} - \angle Z_1|")
+        flag_ang = "⚠ Melebihi threshold" if indicators["angle_more_resistive"] else "✓ Dalam batas"
+        st.markdown(
+            f"= |{zapp_angle:.2f}° − {z1_angle:.2f}°| = **{angle_dev:.2f}°** — {flag_ang}"
+        )
+        st.caption(
+            "Sudut Zapp yang jauh lebih kecil dari sudut Z₁ mengindikasikan komponen resistif "
+            "tambahan — khas gangguan high resistance atau arc resistance."
+        )
+
+        st.markdown("#### 6. Logika Deteksi HR")
+        st.markdown(
+            "HR terdeteksi jika **Rᶠ ≥ threshold** DAN "
+            "(**deviasi sudut ≥ threshold** ATAU **deviasi jarak antar metode ≥ threshold**):"
+        )
+        rf_ok = "✓" if indicators["rf_large"] else "✗"
+        ang_ok = "✓" if indicators["angle_more_resistive"] else "✗"
+        div_ok = "✓" if indicators["distance_methods_diverge"] else "✗"
+        suspected = hr_result["high_resistance_suspected"]
+        st.markdown(
+            f"- {rf_ok} Rᶠ_est = **{rf_est:.4f} Ω**\n"
+            f"- {ang_ok} Deviasi sudut = **{angle_dev:.2f}°**\n"
+            f"- {div_ok} Deviasi jarak antar metode = **{dist_dev:.2f}%**\n\n"
+            f"**Hasil: {'⚠ High Resistance Suspected' if suspected else '✓ Tidak terindikasi HR'}**"
+        )
+        st.caption("*Referensi: Saha et al. (2010) Ch. 6; IEEE Std C37.114-2014 Sec. 6.3*")
+

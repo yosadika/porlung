@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from app_helpers import downsample_xy, downsample_dataframe_for_plot
 from fault_detection import estimate_sampling_rate, calculate_rms_sliding
@@ -283,8 +284,19 @@ def build_synchronized_fault_plot(
     selected_channels,
     title,
     remote_time_shift_s=0.0,
+    current_channels=None,
 ):
-    fig = go.Figure()
+    _has_current = bool(current_channels)
+
+    if _has_current:
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.06,
+            row_heights=[0.55, 0.45],
+        )
+    else:
+        fig = go.Figure()
 
     local_time = local_df["time"] - local_fault_window["fault_time"]
     remote_time = (
@@ -293,48 +305,29 @@ def build_synchronized_fault_plot(
         + remote_time_shift_s
     )
 
-    for channel in selected_channels:
-        if channel in local_df.columns:
-            local_x, local_y = downsample_xy(local_time, local_df[channel])
-            fig.add_trace(
-                go.Scatter(
-                    x=local_x,
-                    y=local_y,
-                    mode="lines",
-                    name=f"Local {channel}",
-                    line=dict(width=1.4),
-                )
-            )
+    def _add(channel, df, time_series, dash_style, row):
+        if channel not in df.columns:
+            return
+        x, y = downsample_xy(time_series, df[channel])
+        name = f"{'Local' if dash_style is None else 'Remote'} {channel}"
+        line = dict(width=1.4) if dash_style is None else dict(width=1.4, dash=dash_style)
+        kw = dict(row=row, col=1) if _has_current else {}
+        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name=name, line=line), **kw)
 
-        if channel in remote_df.columns:
-            remote_x, remote_y = downsample_xy(remote_time, remote_df[channel])
-            fig.add_trace(
-                go.Scatter(
-                    x=remote_x,
-                    y=remote_y,
-                    mode="lines",
-                    name=f"Remote {channel}",
-                    line=dict(width=1.4, dash="dash"),
-                )
-            )
+    for ch in selected_channels:
+        _add(ch, local_df, local_time, None, 1)
+        _add(ch, remote_df, remote_time, "dash", 1)
+
+    if _has_current:
+        for ch in current_channels:
+            _add(ch, local_df, local_time, None, 2)
+            _add(ch, remote_df, remote_time, "dash", 2)
 
     sync_events = [
         (0.0, "Fault", "solid"),
-        (
-            local_fault_window["left_time"] - local_fault_window["fault_time"],
-            "Local Left",
-            "dash",
-        ),
-        (
-            local_fault_window["dft_time"] - local_fault_window["fault_time"],
-            "Local DFT",
-            "dot",
-        ),
-        (
-            local_fault_window["right_time"] - local_fault_window["fault_time"],
-            "Local Right",
-            "dash",
-        ),
+        (local_fault_window["left_time"] - local_fault_window["fault_time"], "Local Left", "dash"),
+        (local_fault_window["dft_time"] - local_fault_window["fault_time"], "Local DFT", "dot"),
+        (local_fault_window["right_time"] - local_fault_window["fault_time"], "Local Right", "dash"),
         (
             remote_fault_window["dft_time"] - remote_fault_window["fault_time"] + remote_time_shift_s,
             "Remote DFT",
@@ -343,12 +336,13 @@ def build_synchronized_fault_plot(
     ]
 
     for x_value, label, dash in sync_events:
-        fig.add_vline(
-            x=x_value,
-            line_dash=dash,
-            annotation_text=label,
-            annotation_position="top",
-        )
+        if _has_current:
+            fig.add_vline(x=x_value, line_dash=dash, annotation_text=label,
+                          annotation_position="top", row=1, col=1)
+            fig.add_vline(x=x_value, line_dash=dash, row=2, col=1)
+        else:
+            fig.add_vline(x=x_value, line_dash=dash, annotation_text=label,
+                          annotation_position="top")
 
     left_limit = min(
         local_fault_window["left_time"] - local_fault_window["fault_time"],
@@ -359,13 +353,24 @@ def build_synchronized_fault_plot(
         remote_fault_window["right_time"] - remote_fault_window["fault_time"] + remote_time_shift_s,
     )
 
-    fig.update_layout(
-        title=title,
-        xaxis_title="Aligned Time from Local Fault (s)",
-        yaxis_title="Magnitude Primary",
-        legend_title="Signal",
-        xaxis=dict(range=[left_limit, right_limit], autorange=False),
-    )
+    if _has_current:
+        fig.update_xaxes(range=[left_limit, right_limit])
+        fig.update_yaxes(title_text="Tegangan Primary", row=1, col=1)
+        fig.update_yaxes(title_text="Arus Primary", row=2, col=1)
+        fig.update_layout(
+            title=title,
+            xaxis2_title="Aligned Time from Local Fault (s)",
+            legend_title="Signal",
+            height=520,
+        )
+    else:
+        fig.update_layout(
+            title=title,
+            xaxis_title="Aligned Time from Local Fault (s)",
+            yaxis_title="Magnitude Primary",
+            legend_title="Signal",
+            xaxis=dict(range=[left_limit, right_limit], autorange=False),
+        )
 
     return fig
 

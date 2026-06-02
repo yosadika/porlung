@@ -280,10 +280,13 @@ def render():
             or fault_phase_to_voltage_channel(remote_fault_type_for_sync.get("fault_type"))
         )
 
-        if fault_phase_voltage_channel in sync_plot_channels:
-            sync_default_channels = [fault_phase_voltage_channel]
-        elif fault_phase_channel in sync_plot_channels:
-            sync_default_channels = [fault_phase_channel]
+        sync_default_channels = []
+        if fault_phase_voltage_channel and fault_phase_voltage_channel in sync_plot_channels:
+            sync_default_channels.append(fault_phase_voltage_channel)
+        if fault_phase_channel and fault_phase_channel in sync_plot_channels:
+            sync_default_channels.append(fault_phase_channel)
+        if not sync_default_channels:
+            sync_default_channels = [ch for ch in ["Va", "Vb", "Vc"] if ch in sync_plot_channels]
 
         sync_selected_channels = st.multiselect(
             "Pilih sinyal untuk grafik sinkronisasi local-remote",
@@ -320,7 +323,9 @@ def render():
                 "auto_voltage_sine": "Auto voltage sine/sag alignment",
                 "selected_channels": "Selected plotted channels",
             }
-            default_sync_reference = "fault_cursor"
+            default_sync_reference = (
+                "fault_phase_voltage" if "fault_phase_voltage" in sync_reference_options else "fault_cursor"
+            )
 
             sync_reference_mode = st.selectbox(
                 "Referensi visual alignment waveform",
@@ -334,7 +339,7 @@ def render():
                 ),
             )
 
-            default_alignment_method = "rms_envelope"
+            default_alignment_method = "raw_correlation"
             sync_alignment_method = st.selectbox(
                 "Metode visual alignment",
                 ["voltage_sine_sag_hybrid", "raw_correlation", "rms_envelope", "superimposed_energy"],
@@ -396,25 +401,33 @@ def render():
             correlation_score = 0.0
 
             if sync_reference_channels:
-                left_limit = min(
-                    local_fault_window["left_time"] - local_fault_window["fault_time"],
-                    remote_fault_window["left_time"] - remote_fault_window["fault_time"],
+                _corr_key = (
+                    tuple(sync_reference_channels),
+                    sync_alignment_method,
+                    float(sync_alignment_search_window_s),
+                    int(local_fault_window.get("dft_index", 0)),
+                    int(remote_fault_window.get("dft_index", 0)),
+                    len(local_assigned_df),
+                    len(remote_assigned_df),
                 )
-                right_limit = max(
-                    local_fault_window["right_time"] - local_fault_window["fault_time"],
-                    remote_fault_window["right_time"] - remote_fault_window["fault_time"],
-                )
-                remote_visual_shift_s, correlation_score = estimate_waveform_time_shift_by_correlation(
-                    local_assigned_df,
-                    remote_assigned_df,
-                    local_fault_window,
-                    remote_fault_window,
-                    sync_reference_channels,
-                    -sync_alignment_search_window_s,
-                    sync_alignment_search_window_s,
-                    frequency=remote_frequency,
-                    method=sync_alignment_method,
-                )
+                if st.session_state.get("_de_corr_cache_key") == _corr_key:
+                    remote_visual_shift_s = st.session_state["_de_corr_shift_s"]
+                    correlation_score = st.session_state["_de_corr_score"]
+                else:
+                    remote_visual_shift_s, correlation_score = estimate_waveform_time_shift_by_correlation(
+                        local_assigned_df,
+                        remote_assigned_df,
+                        local_fault_window,
+                        remote_fault_window,
+                        sync_reference_channels,
+                        -sync_alignment_search_window_s,
+                        sync_alignment_search_window_s,
+                        frequency=remote_frequency,
+                        method=sync_alignment_method,
+                    )
+                    st.session_state["_de_corr_cache_key"] = _corr_key
+                    st.session_state["_de_corr_shift_s"] = remote_visual_shift_s
+                    st.session_state["_de_corr_score"] = correlation_score
 
                 st.caption(
                     "Visual alignment shift remote: "
@@ -428,15 +441,31 @@ def render():
                         "atau gunakan metode RMS envelope/superimposed, lalu cek ulang visual tegangan dan arus."
                     )
 
-            sync_fig = build_synchronized_fault_plot(
-                local_assigned_df,
-                remote_assigned_df,
-                local_fault_window,
-                remote_fault_window,
-                sync_selected_channels,
-                "Synchronized Fault Waveform - Local vs Remote",
-                remote_time_shift_s=remote_visual_shift_s,
+            _sync_fig_key = (
+                tuple(sync_selected_channels),
+                round(remote_visual_shift_s, 9),
+                int(local_fault_window.get("dft_index", 0)),
+                int(remote_fault_window.get("dft_index", 0)),
+                len(local_assigned_df),
+                len(remote_assigned_df),
             )
+            if st.session_state.get("_de_sync_fig_key") == _sync_fig_key:
+                sync_fig = st.session_state["_de_sync_fig"]
+            else:
+                _v_chs = [ch for ch in sync_selected_channels if ch in ("Va", "Vb", "Vc")]
+                _i_chs = [ch for ch in sync_selected_channels if ch in ("Ia", "Ib", "Ic", "IE")]
+                sync_fig = build_synchronized_fault_plot(
+                    local_assigned_df,
+                    remote_assigned_df,
+                    local_fault_window,
+                    remote_fault_window,
+                    _v_chs or sync_selected_channels,
+                    "Synchronized Fault Waveform - Local vs Remote",
+                    remote_time_shift_s=remote_visual_shift_s,
+                    current_channels=_i_chs or None,
+                )
+                st.session_state["_de_sync_fig_key"] = _sync_fig_key
+                st.session_state["_de_sync_fig"] = sync_fig
             st.plotly_chart(sync_fig, use_container_width=True)
 
             apply_sync_to_de = st.checkbox(
@@ -475,11 +504,6 @@ def render():
                     st.session_state["two_ended_remote_sync_reference"] = ", ".join(sync_reference_channels)
                     st.session_state["two_ended_remote_sync_method"] = sync_alignment_method
 
-                    remote_aligned_dft_time = float(remote_assigned_df["time"].iloc[remote_aligned_dft_index])
-                    col_adft1, col_adft2, col_adft3 = st.columns(3)
-                    col_adft1.metric("DE Remote DFT Time", f"{remote_aligned_dft_time:.6f} s")
-                    col_adft2.metric("DE Remote DFT Index", remote_aligned_dft_index)
-                    col_adft3.metric("Waveform Sync Score", f"{correlation_score:.3f}")
                     st.success(
                         "Fasor remote untuk perhitungan DE akan memakai cursor DFT yang sudah "
                         "dikoreksi alignment waveform."
@@ -502,6 +526,90 @@ def render():
         st.warning("Local fault window belum tersedia.")
 
     st.empty()
+
+    # --- Visual Sync Quality (gabungan DFT info + instantaneous Pearson correlation) ---
+    st.markdown("#### Visual Sync Quality")
+    try:
+        _local_fw3 = st.session_state["fault_window"]
+        _local_df3 = st.session_state["assigned_df"]
+        _local_spc3 = int(st.session_state["fault_detection"]["samples_per_cycle"])
+        _r_aligned_idx = st.session_state.get(
+            "two_ended_remote_dft_index_for_calculation",
+            remote_fault_window["dft_index"],
+        )
+        _wf_sync_score = st.session_state.get("_de_corr_score")
+        _vs_shift = st.session_state.get("_de_corr_shift_s")
+        _r_dft_time = float(remote_assigned_df["time"].iloc[_r_aligned_idx])
+
+        # Channel: fasa terganggu sesuai fault_type_result
+        _ft = str(st.session_state.get("fault_type_result", {}).get("fault_type", "")).upper()
+        if "A" in _ft:
+            _pref_ch = "Va"
+        elif "B" in _ft:
+            _pref_ch = "Vb"
+        elif "C" in _ft:
+            _pref_ch = "Vc"
+        else:
+            _pref_ch = "Va"
+        _vs_ch = _pref_ch if (_pref_ch in _local_df3.columns and _pref_ch in remote_assigned_df.columns) else next(
+            (ch for ch in ["Va", "Vb", "Vc"] if ch in _local_df3.columns and ch in remote_assigned_df.columns), None
+        )
+        if _vs_ch is None:
+            raise ValueError("Tidak ada channel tegangan yang sama antara local dan remote.")
+
+        _N = 2
+        _l_vals = _local_df3[_vs_ch].iloc[
+            max(0, _local_fw3["dft_index"] - _N * _local_spc3):
+            _local_fw3["dft_index"] + _N * _local_spc3
+        ].reset_index(drop=True)
+        _r_vals = remote_assigned_df[_vs_ch].iloc[
+            max(0, _r_aligned_idx - _N * remote_samples_per_cycle):
+            _r_aligned_idx + _N * remote_samples_per_cycle
+        ].reset_index(drop=True)
+        _min_len = min(len(_l_vals), len(_r_vals))
+        if _min_len < 10:
+            raise ValueError("Window terlalu pendek.")
+        _inst_corr = float(_l_vals.iloc[:_min_len].corr(_r_vals.iloc[:_min_len]))
+
+        if _inst_corr >= 0.85:
+            _vs_label, _vs_status = "Sinkron", "success"
+        elif _inst_corr >= 0.50:
+            _vs_label, _vs_status = "Cukup Sinkron", "warning"
+        elif _inst_corr >= 0.0:
+            _vs_label, _vs_status = "Kurang Sinkron", "error"
+        else:
+            _vs_label, _vs_status = "Terbalik / Tidak Sinkron", "error"
+
+        _shift_str = f"{_vs_shift:+.4f} s" if _vs_shift is not None else "—"
+        st.caption(
+            f"Visual Sync Score: korelasi Pearson instantaneous {_vs_ch} ({_N} siklus di sekitar DFT cursor). "
+            f"Waveform Sync Score: korelasi envelope/superimposed dari metode alignment yang dipilih."
+        )
+        _m1, _m2, _m3, _m4, _m5 = st.columns(5)
+        _m1.metric("DE Remote DFT Time", f"{_r_dft_time:.6f} s")
+        _m2.metric("DE Remote DFT Index", _r_aligned_idx)
+        _m3.metric("Waveform Sync Score", f"{_wf_sync_score:.3f}" if _wf_sync_score is not None else "—")
+        _m4.metric("Visual Sync Score", f"{_inst_corr:.3f}")
+        _m5.metric("Sync Status", _vs_label)
+
+        if _vs_status == "success":
+            st.success(
+                f"Rekaman tersinkron secara visual — {_vs_ch}, score {_inst_corr:.3f} "
+                f"(shift remote: {_shift_str}). Waveform kedua end beroverlap dengan baik."
+            )
+        elif _vs_status == "warning":
+            st.warning(
+                f"Sinkronisasi cukup — {_vs_ch}, score {_inst_corr:.3f} "
+                f"(shift remote: {_shift_str}). Verifikasi alignment sebelum menggunakan hasil DE."
+            )
+        else:
+            _hint = " Cek kemungkinan polaritas VT remote terbalik." if _inst_corr < 0 else ""
+            st.error(
+                f"Sinkronisasi lemah — {_vs_ch}, score {_inst_corr:.3f}.{_hint} "
+                "Coba ubah referensi atau metode alignment, atau gunakan angle search pada kalkulasi DE."
+            )
+    except Exception as _vse:
+        st.caption(f"Visual sync quality tidak dapat dihitung: {_vse}")
 
     st.markdown("### Two-Ended Calculation")
 

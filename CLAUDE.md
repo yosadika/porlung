@@ -27,10 +27,10 @@ Aplikasi Streamlit untuk analisis gangguan transmisi tenaga listrik. Membaca rek
 | `tower_map.py` | Interpolasi fault pada jalur tower, render Folium map, tabel tower dengan badge proteksi |
 | `rx_locus.py` | Parse relay settings, overlay zona proteksi, trajectory R-X |
 | `line_analysis_helpers.py` | Infer GI name, reverse DE, comparison dataframe, override panjang line |
-| `waveform_helpers.py` | Plot waveform, phasor diagram, sync local/remote |
+| `waveform_helpers.py` | Plot waveform, phasor diagram, sync local/remote; `build_synchronized_fault_plot` mendukung dual subplot tegangan+arus |
 | `single_ended.py` | Kalkulasi SE: loop impedansi, reactance/magnitude/projection method, Takagi fallback (Rf compensation) |
 | `two_ended.py` | Kalkulasi DE: positive-sequence two-ended, quality scoring, candidate ranking, angle search untuk unsync |
-| `fault_workflow_helpers.py` | Explanation text, threshold fault type, TWS location, timestamp parser; `render_se_formula_expander()` |
+| `fault_workflow_helpers.py` | Explanation text, threshold fault type, TWS location, timestamp parser; `render_se_formula_expander()`; `render_hr_formula_expander()` |
 | `summary_helpers.py` | Waveform fokus Summary, scoring SE/DE, grafik posisi SE/DE |
 | `tabs/line_parameter.py` | Render tab Line |
 | `tabs/double_ended.py` | Render tab Double-End; `render_de_formula_expander()` |
@@ -45,8 +45,8 @@ Aplikasi Streamlit untuk analisis gangguan transmisi tenaga listrik. Membaca rek
 5. **Fault inception ≠ DFT cursor:** inception untuk sync/trigger, DFT cursor untuk kalkulasi phasor/locus.
 6. **Default yang tidak boleh diubah:**
    - Auto fault cursor detection: `off`
-   - Referensi visual alignment DE: `fault_cursor` (Fault cursor only)
-   - Metode visual alignment DE: RMS envelope magnitude
+   - Referensi visual alignment DE: `fault_phase_voltage` jika tersedia, fallback `fault_cursor`
+   - Metode visual alignment DE: Raw waveform correlation
    - Zone relay base: primary ohm
    - Tower Map Summary: default fault source = DE jika tersedia
 7. **Setelah perubahan apapun**, jalankan:
