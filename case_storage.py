@@ -42,6 +42,7 @@ CASE_STATE_EXCLUDE_PREFIXES = (
     "remote_cfg_file",
     "remote_dat_file",
     "summary_weather_lightning_xweather",
+    "download_",
 )
 CASE_STATE_EXCLUDE_KEYS = {
     "case_archive_file",
@@ -55,7 +56,29 @@ CASE_STATE_EXCLUDE_KEYS = {
     "xweather_client_id",
     "xweather_client_secret",
     "accuweather_api_key",
+    # Widget keys — tidak boleh di-set setelah widget diinstansiasi
+    "sidebar_credentials_upload",
+    "runtime_credentials_upload",
 }
+
+# Keys dan prefix yang harus dihapus dari session_state saat restore
+# (widget keys yang tidak boleh di-set secara eksternal oleh Streamlit)
+_WIDGET_RESTORE_CLEANUP_KEYS = frozenset({
+    "sidebar_credentials_upload",
+    "runtime_credentials_upload",
+})
+# Prefix widget keys yang tidak boleh di-restore (button, download_button, dll.)
+# Semua prefix ini aman karena tidak ada state key yang valid diawali nama-nama ini.
+_WIDGET_RESTORE_CLEANUP_PREFIXES = (
+    "download_",
+    "clear_",
+    "refresh_",
+    "reload_",
+    "export_",
+    "calculate_",
+    "preview_",
+    "load_tower",
+)
 
 # Kunci-kunci ini SELALU disimpan ke case ZIP dan dipulihkan saat restore,
 # terlepas dari exclude list. Mencakup pengaturan DB, signal assignment, dan line data.
@@ -403,12 +426,26 @@ def restore_case_archive(archive_bytes: bytes):
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         state = json.loads(archive.read("case_state.json").decode("utf-8"))
         for key, value in state.items():
-            st.session_state[key] = restore_case_json_value(value)
+            if key in CASE_STATE_EXCLUDE_KEYS:
+                continue
+            if any(str(key).startswith(prefix) for prefix in CASE_STATE_EXCLUDE_PREFIXES):
+                continue
+            try:
+                st.session_state[key] = restore_case_json_value(value)
+            except Exception:
+                pass
         for logical_name, (name_key, bytes_key, fallback_name) in CASE_FILE_KEYS.items():
             file_info = manifest.get("files", {}).get(logical_name)
             if file_info and file_info.get("path") in archive.namelist():
                 st.session_state[name_key] = file_info.get("name", fallback_name)
                 st.session_state[bytes_key] = archive.read(file_info["path"])
+    # Bersihkan widget keys dari restore lama yang tidak boleh ada di session_state
+    for _k in list(st.session_state.keys()):
+        if _k in _WIDGET_RESTORE_CLEANUP_KEYS or any(str(_k).startswith(p) for p in _WIDGET_RESTORE_CLEANUP_PREFIXES):
+            try:
+                del st.session_state[_k]
+            except Exception:
+                pass
     # Fallback: isi widget input key dari value key jika tidak ada di snapshot
     # (misal case lama yang belum menyimpan widget keys)
     for widget_key, value_key in _CASE_SETTINGS_WIDGET_FALLBACK.items():

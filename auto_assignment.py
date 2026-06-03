@@ -93,9 +93,16 @@ def score_channel_name(name: str, candidates: list[str]) -> int:
 
         if n == k:
             score += 100
-
-        elif k in n:
+        elif n.endswith(k):
+            # Suffix match: "LINECTAIN".endswith("IN") -> True (benar)
+            # "LINECTAIL1".endswith("IN") -> False (tidak salah tangkap)
+            score += 80
+        elif len(k) >= 3 and n.startswith(k):
             score += 50
+        elif len(k) >= 3 and k in n:
+            # Substring hanya untuk keyword panjang (≥3 karakter)
+            # Mencegah "IN" menangkap "LINE", "VB" menangkap "VBUSA"
+            score += 30
 
     return score
 
@@ -161,11 +168,12 @@ def detect_voltage_current_channels(df: pd.DataFrame, metadata: dict):
     va, vb, vc = pick_three_phase(voltage_candidates, scores, kind="voltage")
     ia, ib, ic = pick_three_phase(current_candidates, scores, kind="current")
 
+    selected_phase_channels = {c for c in [va, vb, vc, ia, ib, ic] if c}
     ie = None
-    if ground_candidates:
-        best_ground = ground_candidates[0]
-        if scores[best_ground]["ground_score"] > 0:
-            ie = best_ground
+    for g in ground_candidates:
+        if scores[g]["ground_score"] > 0 and g not in selected_phase_channels:
+            ie = g
+            break
 
     # Fallback magnitude jika nama channel tidak informatif
     if not all([va, vb, vc, ia, ib, ic]):
