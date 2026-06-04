@@ -276,7 +276,7 @@ def explain_single_ended_status(status: str):
         ),
         "CHECK": (
             "CHECK berarti hasil masih bisa dipakai sebagai indikasi, tetapi ada gejala yang perlu divalidasi "
-            "dengan waveform, SOE relay, fault type, polaritas CT/CVT, dan data lapangan."
+            "dengan waveform, SOE (Sequence of Events) relay, fault type, polaritas CT (Current Transformer)/CVT (Capacitive Voltage Transformer), dan data lapangan."
         ),
         "UNCERTAIN": (
             "UNCERTAIN berarti hasil keluar dari batas dasar, misalnya jarak negatif atau melebihi panjang saluran. "
@@ -329,6 +329,20 @@ def explain_sync_warning():
     )
 
 
+# Mapping key_prefix → partner key_prefix untuk sinkronisasi checkbox auto-detection
+_FC_SYNC_PARTNERS = {
+    "local_fc":     "de_local_fc",
+    "de_local_fc":  "local_fc",
+    "remote_fc":    "de_remote_fc",
+    "de_remote_fc": "remote_fc",
+}
+
+
+def _sync_checkbox(src_key: str, dst_key: str) -> None:
+    """on_change callback: langsung set nilai partner checkbox ke nilai yang sama."""
+    st.session_state[dst_key] = st.session_state[src_key]
+
+
 def _render_local_fault_cursor(
     metadata: dict,
     assigned_df_key: str,
@@ -337,6 +351,7 @@ def _render_local_fault_cursor(
     fault_detection_key: str,
     key_prefix: str,
     compact: bool = False,
+    settings_source_prefix: str = "",
 ):
     if not compact:
         st.subheader("Fault Detection & Cursor Window")
@@ -360,174 +375,217 @@ def _render_local_fault_cursor(
     assigned_df = st.session_state[assigned_df_key]
     local_transformer_data = st.session_state.get(transformer_key, {})
 
-    st.markdown("### Parameter Deteksi Gangguan")
+    def _src(param, default):
+        """Baca nilai dari settings_source_prefix jika tersedia, fallback ke default."""
+        if settings_source_prefix:
+            return st.session_state.get(f"{settings_source_prefix}_{param}", default)
+        return default
 
-    col_fd1, col_w1, col_w2 = st.columns(3)
-
-    with col_fd1:
-        frequency = st.number_input(
-            "Frekuensi Sistem (Hz)",
-            value=float(metadata["frequency"]) if metadata["frequency"] else 50.0,
-            min_value=40.0,
-            max_value=70.0,
-            step=0.001,
-            format="%.5f",
-            key=f"{key_prefix}_frequency",
+    if settings_source_prefix:
+        # Compact DE view: parameter lain dari source, hanya checkbox auto dirender
+        st.caption(
+            "⚙️ Parameter deteksi mengikuti pengaturan di halaman **Local End > Fault Cursor**. "
+            "Checkbox di bawah disinkronkan antar kedua halaman."
         )
-
-    with col_w1:
-        pre_fault_cycles = st.number_input(
-            "Pre-fault Window (cycles)",
-            value=2,
-            min_value=1,
-            max_value=10,
-            step=1,
-            key=f"{key_prefix}_pre_fault_cycles",
+        _auto_partner_key = f"{settings_source_prefix}_use_auto_fault_detection"
+        use_auto_fault_detection = st.checkbox(
+            "Gunakan deteksi otomatis adaptif nominal + pre-fault",
+            key=f"{key_prefix}_use_auto_fault_detection",
+            on_change=_sync_checkbox,
+            args=(f"{key_prefix}_use_auto_fault_detection", _auto_partner_key),
+            help=(
+                "Aplikasi memakai pre-fault RMS bila normal. Jika pre-fault terlihat sudah abnormal, "
+                "aplikasi memakai referensi nominal dari VT/CT sebagai pembanding tambahan."
+            ),
         )
-
-    with col_w2:
-        post_fault_cycles = st.number_input(
-            "Post-fault Window (cycles)",
-            value=4,
-            min_value=1,
-            max_value=20,
-            step=1,
-            key=f"{key_prefix}_post_fault_cycles",
+        frequency                    = _src("frequency", float(metadata.get("frequency") or 50.0))
+        pre_fault_cycles             = _src("pre_fault_cycles", 2)
+        post_fault_cycles            = _src("post_fault_cycles", 4)
+        current_threshold_multiplier = _src("current_threshold_multiplier", 2.0)
+        voltage_drop_threshold       = _src("voltage_drop_threshold", 0.85)
+        use_advanced_fault_detection = _src("use_advanced_fault_detection", False)
+        fault_detection_method       = _src("fault_detection_method", "legacy_rms")
+        adaptive_threshold_sigma     = _src("adaptive_threshold_sigma", 6.0)
+        superimposed_threshold_sigma = _src("superimposed_threshold_sigma", 8.0)
+        consecutive_samples_input    = _src("consecutive_samples_input", 0)
+        refine_fault_bar             = _src("refine_fault_bar", True)
+        auto_fault_detection_settings = calculate_auto_fault_detection_parameters(
+            assigned_df,
+            frequency=frequency,
+            pre_fault_cycles=int(pre_fault_cycles),
+            nominal_phase_voltage_rms=local_transformer_data.get("nominal_phase_voltage_rms"),
+            nominal_current_rms=local_transformer_data.get("nominal_current_rms"),
         )
+    else:
+        st.markdown("### Parameter Deteksi Gangguan")
 
-    auto_fault_detection_settings = calculate_auto_fault_detection_parameters(
-        assigned_df,
-        frequency=frequency,
-        pre_fault_cycles=int(pre_fault_cycles),
-        nominal_phase_voltage_rms=local_transformer_data.get("nominal_phase_voltage_rms"),
-        nominal_current_rms=local_transformer_data.get("nominal_current_rms"),
-    )
+        col_fd1, col_w1, col_w2 = st.columns(3)
 
-    use_auto_fault_detection = st.checkbox(
-        "Gunakan deteksi otomatis adaptif nominal + pre-fault",
-        value=False,
-        key=f"{key_prefix}_use_auto_fault_detection",
-        help=(
-            "Aplikasi memakai pre-fault RMS bila normal. Jika pre-fault terlihat sudah abnormal, "
-            "aplikasi memakai referensi nominal dari VT/CT sebagai pembanding tambahan."
-        ),
-    )
-
-    _thresh_ctx = st.expander("Parameter Deteksi Lanjutan", expanded=False) if compact else contextlib.nullcontext()
-    with _thresh_ctx:
-        col_fd2, col_fd3 = st.columns(2)
-        with col_fd2:
-            current_threshold_multiplier = st.number_input(
-                "Multiplier Kenaikan Arus",
-                value=float(auto_fault_detection_settings["current_threshold_multiplier"]),
-                min_value=1.01,
-                max_value=10.0,
+        with col_fd1:
+            frequency = st.number_input(
+                "Frekuensi Sistem (Hz)",
+                value=float(metadata["frequency"]) if metadata["frequency"] else 50.0,
+                min_value=40.0,
+                max_value=70.0,
                 step=0.001,
                 format="%.5f",
-                disabled=use_auto_fault_detection,
-                key=f"{key_prefix}_current_threshold_multiplier",
-            )
-        with col_fd3:
-            voltage_drop_threshold = st.number_input(
-                "Batas Drop Tegangan",
-                value=float(auto_fault_detection_settings["voltage_drop_threshold"]),
-                min_value=0.1,
-                max_value=1.0,
-                step=0.0001,
-                format="%.5f",
-                disabled=use_auto_fault_detection,
-                key=f"{key_prefix}_voltage_drop_threshold",
+                key=f"{key_prefix}_frequency",
             )
 
+        with col_w1:
+            pre_fault_cycles = st.number_input(
+                "Pre-fault Window (cycles)",
+                value=2,
+                min_value=1,
+                max_value=10,
+                step=1,
+                key=f"{key_prefix}_pre_fault_cycles",
+            )
+
+        with col_w2:
+            post_fault_cycles = st.number_input(
+                "Post-fault Window (cycles)",
+                value=4,
+                min_value=1,
+                max_value=20,
+                step=1,
+                key=f"{key_prefix}_post_fault_cycles",
+            )
+
+        auto_fault_detection_settings = calculate_auto_fault_detection_parameters(
+            assigned_df,
+            frequency=frequency,
+            pre_fault_cycles=int(pre_fault_cycles),
+            nominal_phase_voltage_rms=local_transformer_data.get("nominal_phase_voltage_rms"),
+            nominal_current_rms=local_transformer_data.get("nominal_current_rms"),
+        )
+
+        _partner_auto_key = f"{_FC_SYNC_PARTNERS.get(key_prefix, '')}_use_auto_fault_detection"
+        use_auto_fault_detection = st.checkbox(
+            "Gunakan deteksi otomatis adaptif nominal + pre-fault",
+            key=f"{key_prefix}_use_auto_fault_detection",
+            on_change=_sync_checkbox,
+            args=(f"{key_prefix}_use_auto_fault_detection", _partner_auto_key),
+            help=(
+                "Aplikasi memakai pre-fault RMS bila normal. Jika pre-fault terlihat sudah abnormal, "
+                "aplikasi memakai referensi nominal dari VT/CT sebagai pembanding tambahan."
+            ),
+        )
+
+        _thresh_ctx = st.expander("Parameter Deteksi Lanjutan", expanded=False) if compact else contextlib.nullcontext()
+        with _thresh_ctx:
+            col_fd2, col_fd3 = st.columns(2)
+            with col_fd2:
+                current_threshold_multiplier = st.number_input(
+                    "Multiplier Kenaikan Arus",
+                    value=float(auto_fault_detection_settings["current_threshold_multiplier"]),
+                    min_value=1.01,
+                    max_value=10.0,
+                    step=0.001,
+                    format="%.5f",
+                    disabled=use_auto_fault_detection,
+                    key=f"{key_prefix}_current_threshold_multiplier",
+                )
+            with col_fd3:
+                voltage_drop_threshold = st.number_input(
+                    "Batas Drop Tegangan",
+                    value=float(auto_fault_detection_settings["voltage_drop_threshold"]),
+                    min_value=0.1,
+                    max_value=1.0,
+                    step=0.0001,
+                    format="%.5f",
+                    disabled=use_auto_fault_detection,
+                    key=f"{key_prefix}_voltage_drop_threshold",
+                )
+
+        with st.expander("Detail Parameter Deteksi Otomatis"):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"Parameter": key, "Value": value}
+                        for key, value in auto_fault_detection_settings.items()
+                    ]
+                ).style.format(
+                    {"Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x}
+                ),
+                use_container_width=True,
+            )
+
+        with st.expander("Advanced Fault Bar Tuning"):
+            use_advanced_fault_detection = st.checkbox(
+                "Use Advanced Fault Detection",
+                value=use_auto_fault_detection,
+                help="Aktifkan hanya jika fault bar otomatis kurang presisi pada record lokal.",
+                disabled=use_auto_fault_detection,
+                key=f"{key_prefix}_use_advanced_fault_detection",
+            )
+
+            fault_detection_method = st.selectbox(
+                "Fault Detection Method",
+                ["legacy_rms", "hybrid_superimposed"],
+                index=1,
+                disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
+                help="hybrid_superimposed memakai energi perubahan satu siklus lalu divalidasi RMS.",
+                key=f"{key_prefix}_fault_detection_method",
+            )
+
+            col_adv1, col_adv2, col_adv3, col_adv4 = st.columns(4)
+
+            with col_adv1:
+                adaptive_threshold_sigma = st.number_input(
+                    "Adaptive Threshold Sigma",
+                    value=6.0,
+                    min_value=2.0,
+                    max_value=20.0,
+                    step=0.001,
+                    format="%.5f",
+                    help="Threshold adaptif terhadap noise pre-fault. Lebih kecil = lebih sensitif.",
+                    disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
+                    key=f"{key_prefix}_adaptive_threshold_sigma",
+                )
+
+            with col_adv2:
+                superimposed_threshold_sigma = st.number_input(
+                    "Superimposed Threshold Sigma",
+                    value=8.0,
+                    min_value=2.0,
+                    max_value=30.0,
+                    step=0.001,
+                    format="%.5f",
+                    disabled=(
+                        not use_advanced_fault_detection
+                        or use_auto_fault_detection
+                        or fault_detection_method != "hybrid_superimposed"
+                    ),
+                    help="Threshold energi superimposed terhadap baseline pre-fault.",
+                    key=f"{key_prefix}_superimposed_threshold_sigma",
+                )
+
+            with col_adv3:
+                consecutive_samples_input = st.number_input(
+                    "Consecutive Samples",
+                    value=0,
+                    min_value=0,
+                    max_value=200,
+                    step=1,
+                    help="0 = otomatis sekitar 0.1 siklus. Nilai lebih besar menolak spike sesaat.",
+                    disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
+                    key=f"{key_prefix}_consecutive_samples_input",
+                )
+
+            with col_adv4:
+                refine_fault_bar = st.checkbox(
+                    "Refine Fault Bar",
+                    value=True,
+                    help="Backtrack dari kandidat RMS ke perubahan instantaneous awal.",
+                    disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
+                    key=f"{key_prefix}_refine_fault_bar",
+                )
+
+    # Override dengan auto settings jika checkbox aktif (berlaku di kedua mode)
     if use_auto_fault_detection:
         current_threshold_multiplier = auto_fault_detection_settings["current_threshold_multiplier"]
         voltage_drop_threshold = auto_fault_detection_settings["voltage_drop_threshold"]
-
-    with st.expander("Detail Parameter Deteksi Otomatis"):
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {"Parameter": key, "Value": value}
-                    for key, value in auto_fault_detection_settings.items()
-                ]
-            ).style.format(
-                {"Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x}
-            ),
-            use_container_width=True,
-        )
-
-    with st.expander("Advanced Fault Bar Tuning"):
-        use_advanced_fault_detection = st.checkbox(
-            "Use Advanced Fault Detection",
-            value=use_auto_fault_detection,
-            help="Aktifkan hanya jika fault bar otomatis kurang presisi pada record lokal.",
-            disabled=use_auto_fault_detection,
-            key=f"{key_prefix}_use_advanced_fault_detection",
-        )
-
-        fault_detection_method = st.selectbox(
-            "Fault Detection Method",
-            ["legacy_rms", "hybrid_superimposed"],
-            index=1,
-            disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
-            help="hybrid_superimposed memakai energi perubahan satu siklus lalu divalidasi RMS.",
-            key=f"{key_prefix}_fault_detection_method",
-        )
-
-        col_adv1, col_adv2, col_adv3, col_adv4 = st.columns(4)
-
-        with col_adv1:
-            adaptive_threshold_sigma = st.number_input(
-                "Adaptive Threshold Sigma",
-                value=6.0,
-                min_value=2.0,
-                max_value=20.0,
-                step=0.001,
-                format="%.5f",
-                help="Threshold adaptif terhadap noise pre-fault. Lebih kecil = lebih sensitif.",
-                disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
-                key=f"{key_prefix}_adaptive_threshold_sigma",
-            )
-
-        with col_adv2:
-            superimposed_threshold_sigma = st.number_input(
-                "Superimposed Threshold Sigma",
-                value=8.0,
-                min_value=2.0,
-                max_value=30.0,
-                step=0.001,
-                format="%.5f",
-                disabled=(
-                    not use_advanced_fault_detection
-                    or use_auto_fault_detection
-                    or fault_detection_method != "hybrid_superimposed"
-                ),
-                help="Threshold energi superimposed terhadap baseline pre-fault.",
-                key=f"{key_prefix}_superimposed_threshold_sigma",
-            )
-
-        with col_adv3:
-            consecutive_samples_input = st.number_input(
-                "Consecutive Samples",
-                value=0,
-                min_value=0,
-                max_value=200,
-                step=1,
-                help="0 = otomatis sekitar 0.1 siklus. Nilai lebih besar menolak spike sesaat.",
-                disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
-                key=f"{key_prefix}_consecutive_samples_input",
-            )
-
-        with col_adv4:
-            refine_fault_bar = st.checkbox(
-                "Refine Fault Bar",
-                value=True,
-                help="Backtrack dari kandidat RMS ke perubahan instantaneous awal.",
-                disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
-                key=f"{key_prefix}_refine_fault_bar",
-            )
-
-    if use_auto_fault_detection:
         use_advanced_fault_detection = True
         fault_detection_method = auto_fault_detection_settings["fault_detection_method"]
         adaptive_threshold_sigma = auto_fault_detection_settings["adaptive_threshold_sigma"]
@@ -690,6 +748,8 @@ def _render_local_fault_cursor(
             ])
             st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_fault_window_chart")
 
+        render_fault_cursor_explanation(detection, fault_window)
+
 
 def _render_remote_fault_cursor(
     metadata: dict,
@@ -699,6 +759,7 @@ def _render_remote_fault_cursor(
     fault_detection_key: str,
     key_prefix: str,
     compact: bool = False,
+    settings_source_prefix: str = "",
 ):
     if not compact:
         st.subheader("Remote Fault Detection & Cursor Window")
@@ -722,174 +783,215 @@ def _render_remote_fault_cursor(
 
     transformer_data = st.session_state.get(transformer_key, {})
 
-    st.markdown("### Parameter Deteksi Gangguan")
+    def _src(param, default):
+        if settings_source_prefix:
+            return st.session_state.get(f"{settings_source_prefix}_{param}", default)
+        return default
 
-    col_fd1, col_w1, col_w2 = st.columns(3)
-
-    with col_fd1:
-        frequency = st.number_input(
-            "Frekuensi Sistem (Hz)",
-            value=float(metadata.get("frequency") or 50.0),
-            min_value=40.0,
-            max_value=70.0,
-            step=0.001,
-            format="%.5f",
-            key=f"{key_prefix}_frequency",
+    if settings_source_prefix:
+        st.caption(
+            "⚙️ Parameter deteksi mengikuti pengaturan di halaman **Remote End > Fault Cursor**. "
+            "Checkbox di bawah disinkronkan antar kedua halaman."
         )
-
-    with col_w1:
-        pre_fault_cycles = st.number_input(
-            "Pre-fault Window (cycles)",
-            value=2,
-            min_value=1,
-            max_value=10,
-            step=1,
-            key=f"{key_prefix}_pre_fault_cycles",
+        _auto_partner_key = f"{settings_source_prefix}_use_auto_fault_detection"
+        use_auto_fault_detection = st.checkbox(
+            "Gunakan deteksi otomatis adaptif nominal + pre-fault",
+            key=f"{key_prefix}_use_auto_fault_detection",
+            on_change=_sync_checkbox,
+            args=(f"{key_prefix}_use_auto_fault_detection", _auto_partner_key),
+            help=(
+                "Aplikasi memakai pre-fault RMS bila normal. Jika pre-fault terlihat sudah abnormal, "
+                "aplikasi memakai referensi nominal dari VT/CT sebagai pembanding tambahan."
+            ),
         )
-
-    with col_w2:
-        post_fault_cycles = st.number_input(
-            "Post-fault Window (cycles)",
-            value=4,
-            min_value=1,
-            max_value=20,
-            step=1,
-            key=f"{key_prefix}_post_fault_cycles",
+        frequency                    = _src("frequency", float(metadata.get("frequency") or 50.0))
+        pre_fault_cycles             = _src("pre_fault_cycles", 2)
+        post_fault_cycles            = _src("post_fault_cycles", 4)
+        current_threshold_multiplier = _src("current_threshold_multiplier", 2.0)
+        voltage_drop_threshold       = _src("voltage_drop_threshold", 0.85)
+        use_advanced_fault_detection = _src("use_advanced_fault_detection", False)
+        fault_detection_method       = _src("fault_detection_method", "legacy_rms")
+        adaptive_threshold_sigma     = _src("adaptive_threshold_sigma", 6.0)
+        superimposed_threshold_sigma = _src("superimposed_threshold_sigma", 8.0)
+        consecutive_samples_input    = _src("consecutive_samples_input", 0)
+        refine_fault_bar             = _src("refine_fault_bar", True)
+        auto_fault_detection_settings = calculate_auto_fault_detection_parameters(
+            assigned_df,
+            frequency=frequency,
+            pre_fault_cycles=int(pre_fault_cycles),
+            nominal_phase_voltage_rms=transformer_data.get("nominal_phase_voltage_rms"),
+            nominal_current_rms=transformer_data.get("nominal_current_rms"),
         )
+    else:
+        st.markdown("### Parameter Deteksi Gangguan")
 
-    auto_fault_detection_settings = calculate_auto_fault_detection_parameters(
-        assigned_df,
-        frequency=frequency,
-        pre_fault_cycles=int(pre_fault_cycles),
-        nominal_phase_voltage_rms=transformer_data.get("nominal_phase_voltage_rms"),
-        nominal_current_rms=transformer_data.get("nominal_current_rms"),
-    )
+        col_fd1, col_w1, col_w2 = st.columns(3)
 
-    use_auto_fault_detection = st.checkbox(
-        "Gunakan deteksi otomatis adaptif nominal + pre-fault",
-        value=False,
-        key=f"{key_prefix}_use_auto_fault_detection",
-        help=(
-            "Aplikasi memakai pre-fault RMS bila normal. Jika pre-fault terlihat sudah abnormal, "
-            "aplikasi memakai referensi nominal dari VT/CT sebagai pembanding tambahan."
-        ),
-    )
-
-    _thresh_ctx = st.expander("Parameter Deteksi Lanjutan", expanded=False) if compact else contextlib.nullcontext()
-    with _thresh_ctx:
-        col_fd2, col_fd3 = st.columns(2)
-        with col_fd2:
-            current_threshold_multiplier = st.number_input(
-                "Multiplier Kenaikan Arus",
-                value=float(auto_fault_detection_settings["current_threshold_multiplier"]),
-                min_value=1.01,
-                max_value=10.0,
+        with col_fd1:
+            frequency = st.number_input(
+                "Frekuensi Sistem (Hz)",
+                value=float(metadata.get("frequency") or 50.0),
+                min_value=40.0,
+                max_value=70.0,
                 step=0.001,
                 format="%.5f",
-                disabled=use_auto_fault_detection,
-                key=f"{key_prefix}_current_threshold_multiplier",
-            )
-        with col_fd3:
-            voltage_drop_threshold = st.number_input(
-                "Batas Drop Tegangan",
-                value=float(auto_fault_detection_settings["voltage_drop_threshold"]),
-                min_value=0.1,
-                max_value=1.0,
-                step=0.0001,
-                format="%.5f",
-                disabled=use_auto_fault_detection,
-                key=f"{key_prefix}_voltage_drop_threshold",
+                key=f"{key_prefix}_frequency",
             )
 
+        with col_w1:
+            pre_fault_cycles = st.number_input(
+                "Pre-fault Window (cycles)",
+                value=2,
+                min_value=1,
+                max_value=10,
+                step=1,
+                key=f"{key_prefix}_pre_fault_cycles",
+            )
+
+        with col_w2:
+            post_fault_cycles = st.number_input(
+                "Post-fault Window (cycles)",
+                value=4,
+                min_value=1,
+                max_value=20,
+                step=1,
+                key=f"{key_prefix}_post_fault_cycles",
+            )
+
+        auto_fault_detection_settings = calculate_auto_fault_detection_parameters(
+            assigned_df,
+            frequency=frequency,
+            pre_fault_cycles=int(pre_fault_cycles),
+            nominal_phase_voltage_rms=transformer_data.get("nominal_phase_voltage_rms"),
+            nominal_current_rms=transformer_data.get("nominal_current_rms"),
+        )
+
+        _partner_auto_key = f"{_FC_SYNC_PARTNERS.get(key_prefix, '')}_use_auto_fault_detection"
+        use_auto_fault_detection = st.checkbox(
+            "Gunakan deteksi otomatis adaptif nominal + pre-fault",
+            key=f"{key_prefix}_use_auto_fault_detection",
+            on_change=_sync_checkbox,
+            args=(f"{key_prefix}_use_auto_fault_detection", _partner_auto_key),
+            help=(
+                "Aplikasi memakai pre-fault RMS bila normal. Jika pre-fault terlihat sudah abnormal, "
+                "aplikasi memakai referensi nominal dari VT/CT sebagai pembanding tambahan."
+            ),
+        )
+
+        _thresh_ctx = st.expander("Parameter Deteksi Lanjutan", expanded=False) if compact else contextlib.nullcontext()
+        with _thresh_ctx:
+            col_fd2, col_fd3 = st.columns(2)
+            with col_fd2:
+                current_threshold_multiplier = st.number_input(
+                    "Multiplier Kenaikan Arus",
+                    value=float(auto_fault_detection_settings["current_threshold_multiplier"]),
+                    min_value=1.01,
+                    max_value=10.0,
+                    step=0.001,
+                    format="%.5f",
+                    disabled=use_auto_fault_detection,
+                    key=f"{key_prefix}_current_threshold_multiplier",
+                )
+            with col_fd3:
+                voltage_drop_threshold = st.number_input(
+                    "Batas Drop Tegangan",
+                    value=float(auto_fault_detection_settings["voltage_drop_threshold"]),
+                    min_value=0.1,
+                    max_value=1.0,
+                    step=0.0001,
+                    format="%.5f",
+                    disabled=use_auto_fault_detection,
+                    key=f"{key_prefix}_voltage_drop_threshold",
+                )
+
+        with st.expander("Detail Parameter Deteksi Otomatis"):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"Parameter": key, "Value": value}
+                        for key, value in auto_fault_detection_settings.items()
+                    ]
+                ).style.format(
+                    {"Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x}
+                ),
+                use_container_width=True,
+            )
+
+        with st.expander("Advanced Fault Bar Tuning"):
+            use_advanced_fault_detection = st.checkbox(
+                "Use Advanced Fault Detection",
+                value=use_auto_fault_detection,
+                help="Aktifkan hanya jika fault bar otomatis kurang presisi pada record remote.",
+                disabled=use_auto_fault_detection,
+                key=f"{key_prefix}_use_advanced_fault_detection",
+            )
+
+            fault_detection_method = st.selectbox(
+                "Fault Detection Method",
+                ["legacy_rms", "hybrid_superimposed"],
+                index=1,
+                disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
+                help="hybrid_superimposed memakai energi perubahan satu siklus lalu divalidasi RMS.",
+                key=f"{key_prefix}_fault_detection_method",
+            )
+
+            col_adv1, col_adv2, col_adv3, col_adv4 = st.columns(4)
+
+            with col_adv1:
+                adaptive_threshold_sigma = st.number_input(
+                    "Adaptive Threshold Sigma",
+                    value=6.0,
+                    min_value=2.0,
+                    max_value=20.0,
+                    step=0.001,
+                    format="%.5f",
+                    help="Threshold adaptif terhadap noise pre-fault. Lebih kecil = lebih sensitif.",
+                    disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
+                    key=f"{key_prefix}_adaptive_threshold_sigma",
+                )
+
+            with col_adv2:
+                superimposed_threshold_sigma = st.number_input(
+                    "Superimposed Threshold Sigma",
+                    value=8.0,
+                    min_value=2.0,
+                    max_value=30.0,
+                    step=0.001,
+                    format="%.5f",
+                    disabled=(
+                        not use_advanced_fault_detection
+                        or use_auto_fault_detection
+                        or fault_detection_method != "hybrid_superimposed"
+                    ),
+                    help="Threshold energi superimposed terhadap baseline pre-fault.",
+                    key=f"{key_prefix}_superimposed_threshold_sigma",
+                )
+
+            with col_adv3:
+                consecutive_samples_input = st.number_input(
+                    "Consecutive Samples",
+                    value=0,
+                    min_value=0,
+                    max_value=200,
+                    step=1,
+                    help="0 = otomatis sekitar 0.1 siklus. Nilai lebih besar menolak spike sesaat.",
+                    disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
+                    key=f"{key_prefix}_consecutive_samples_input",
+                )
+
+            with col_adv4:
+                refine_fault_bar = st.checkbox(
+                    "Refine Fault Bar",
+                    value=True,
+                    help="Backtrack dari kandidat RMS ke perubahan instantaneous awal.",
+                    disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
+                    key=f"{key_prefix}_refine_fault_bar",
+                )
+
+    # Override dengan auto settings jika checkbox aktif (berlaku di kedua mode)
     if use_auto_fault_detection:
         current_threshold_multiplier = auto_fault_detection_settings["current_threshold_multiplier"]
         voltage_drop_threshold = auto_fault_detection_settings["voltage_drop_threshold"]
-
-    with st.expander("Detail Parameter Deteksi Otomatis"):
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {"Parameter": key, "Value": value}
-                    for key, value in auto_fault_detection_settings.items()
-                ]
-            ).style.format(
-                {"Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x}
-            ),
-            use_container_width=True,
-        )
-
-    with st.expander("Advanced Fault Bar Tuning"):
-        use_advanced_fault_detection = st.checkbox(
-            "Use Advanced Fault Detection",
-            value=use_auto_fault_detection,
-            help="Aktifkan hanya jika fault bar otomatis kurang presisi pada record remote.",
-            disabled=use_auto_fault_detection,
-            key=f"{key_prefix}_use_advanced_fault_detection",
-        )
-
-        fault_detection_method = st.selectbox(
-            "Fault Detection Method",
-            ["legacy_rms", "hybrid_superimposed"],
-            index=1,
-            disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
-            help="hybrid_superimposed memakai energi perubahan satu siklus lalu divalidasi RMS.",
-            key=f"{key_prefix}_fault_detection_method",
-        )
-
-        col_adv1, col_adv2, col_adv3, col_adv4 = st.columns(4)
-
-        with col_adv1:
-            adaptive_threshold_sigma = st.number_input(
-                "Adaptive Threshold Sigma",
-                value=6.0,
-                min_value=2.0,
-                max_value=20.0,
-                step=0.001,
-                format="%.5f",
-                help="Threshold adaptif terhadap noise pre-fault. Lebih kecil = lebih sensitif.",
-                disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
-                key=f"{key_prefix}_adaptive_threshold_sigma",
-            )
-
-        with col_adv2:
-            superimposed_threshold_sigma = st.number_input(
-                "Superimposed Threshold Sigma",
-                value=8.0,
-                min_value=2.0,
-                max_value=30.0,
-                step=0.001,
-                format="%.5f",
-                disabled=(
-                    not use_advanced_fault_detection
-                    or use_auto_fault_detection
-                    or fault_detection_method != "hybrid_superimposed"
-                ),
-                help="Threshold energi superimposed terhadap baseline pre-fault.",
-                key=f"{key_prefix}_superimposed_threshold_sigma",
-            )
-
-        with col_adv3:
-            consecutive_samples_input = st.number_input(
-                "Consecutive Samples",
-                value=0,
-                min_value=0,
-                max_value=200,
-                step=1,
-                help="0 = otomatis sekitar 0.1 siklus. Nilai lebih besar menolak spike sesaat.",
-                disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
-                key=f"{key_prefix}_consecutive_samples_input",
-            )
-
-        with col_adv4:
-            refine_fault_bar = st.checkbox(
-                "Refine Fault Bar",
-                value=True,
-                help="Backtrack dari kandidat RMS ke perubahan instantaneous awal.",
-                disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
-                key=f"{key_prefix}_refine_fault_bar",
-            )
-
-    if use_auto_fault_detection:
         use_advanced_fault_detection = True
         fault_detection_method = auto_fault_detection_settings["fault_detection_method"]
         adaptive_threshold_sigma = auto_fault_detection_settings["adaptive_threshold_sigma"]
@@ -1067,6 +1169,8 @@ def _render_remote_fault_cursor(
                 ])
                 st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_fault_window_chart")
 
+        render_fault_cursor_explanation(detection, fault_window)
+
 
 def render_fault_cursor(
     end: str,
@@ -1077,11 +1181,17 @@ def render_fault_cursor(
     fault_detection_key: str,
     key_prefix: str,
     compact: bool = False,
+    settings_source_prefix: str = "",
 ):
     """Render fault detection & cursor UI for local or remote end.
 
     When ``compact=True`` (used in DE tab), secondary parameters are collapsed
-    by default and the validation chart is shown directly without an expander.
+    and the validation chart is shown directly without an expander.
+
+    ``settings_source_prefix``: when provided (DE compact mode), skip parameter
+    widgets and read detection settings directly from this prefix's session_state
+    keys — guaranteeing the DE view always uses the same settings as the
+    dedicated Local/Remote End > Fault Cursor page.
     """
     metadata = st.session_state.get(metadata_key, {}) or {}
 
@@ -1094,6 +1204,7 @@ def render_fault_cursor(
             fault_detection_key=fault_detection_key,
             key_prefix=key_prefix,
             compact=compact,
+            settings_source_prefix=settings_source_prefix,
         )
     else:
         _render_remote_fault_cursor(
@@ -1104,6 +1215,126 @@ def render_fault_cursor(
             fault_detection_key=fault_detection_key,
             key_prefix=key_prefix,
             compact=compact,
+            settings_source_prefix=settings_source_prefix,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fault cursor explanation
+# ---------------------------------------------------------------------------
+
+def render_fault_cursor_explanation(detection: dict, fault_window: dict):
+    """Tampilkan penjelasan mengapa fault cursor berada di titik tersebut."""
+    if not detection or not detection.get("detected"):
+        st.info("Fault cursor ditentukan secara manual — tidak ada metadata deteksi otomatis.")
+        return
+
+    _METHOD_LABELS = {
+        "legacy_rms":           "RMS Sliding Window (legacy)",
+        "hybrid_superimposed":  "Hybrid — RMS + Superimposed Component",
+    }
+    _REF_LABELS = {
+        "prefault_rms":         "Pre-fault RMS (kondisi normal sebelum gangguan)",
+        "nominal_vt_assisted":  "Nominal VT (pre-fault tegangan rendah → pakai tegangan nominal)",
+        "nominal_ct_vt_assisted": "Nominal CT/VT (pre-fault arus tinggi → pakai arus nominal)",
+    }
+
+    method      = detection.get("method", "legacy_rms")
+    ref_mode    = detection.get("reference_mode", "prefault_rms")
+    i_ref       = float(detection.get("reference_current") or detection.get("prefault_current") or 0.0)
+    v_ref       = float(detection.get("reference_voltage") or detection.get("prefault_voltage") or 0.0)
+    i_prefault  = float(detection.get("prefault_current") or 0.0)
+    v_prefault  = float(detection.get("prefault_voltage") or 0.0)
+    i_pickup    = float(detection.get("current_pickup") or 0.0)
+    v_pickup    = float(detection.get("voltage_pickup") or 0.0)
+    confidence  = float(detection.get("confidence_score") or 0.0)
+    fault_time  = float(detection.get("fault_time") or 0.0)
+    dft_time    = float(fault_window.get("dft_time") or 0.0)
+
+    with st.expander("Dasar Penentuan Fault Cursor", expanded=False):
+
+        def _tbl(rows):
+            st.dataframe(
+                pd.DataFrame(rows),
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Parameter": st.column_config.TextColumn("Parameter", width="medium"),
+                    "Nilai": st.column_config.TextColumn("Nilai", width="large"),
+                    "Arus": st.column_config.TextColumn("Arus"),
+                    "Tegangan": st.column_config.TextColumn("Tegangan"),
+                },
+            )
+
+        # ── Hasil Deteksi ─────────────────────────────────────────────
+        st.markdown("##### Hasil Deteksi")
+        _hasil_rows = [
+            {"Parameter": "Waktu Fault Inception", "Nilai": f"{fault_time:.6f} s"},
+            {"Parameter": "Confidence Deteksi", "Nilai": f"{confidence:.1f} / 10"},
+            {"Parameter": "Metode Deteksi", "Nilai": _METHOD_LABELS.get(method, method)},
+            {"Parameter": "DFT Cursor", "Nilai": f"{dft_time:.6f} s  (1 siklus setelah inception)"},
+        ]
+        if detection.get("refine_fault_bar"):
+            _hasil_rows.append({
+                "Parameter": "Fault Bar Refinement",
+                "Nilai": f"RMS {detection.get('rms_fault_time', 0.0):.6f} s → diperhalus {fault_time:.6f} s",
+            })
+        _tbl(_hasil_rows)
+
+        # ── Referensi & Threshold Pickup ──────────────────────────────
+        st.markdown("##### Referensi Pre-fault dan Threshold Pickup")
+        st.caption(f"Mode referensi: {_REF_LABELS.get(ref_mode, ref_mode)}")
+        _ref_rows = [
+            {"Parameter": "Pre-fault (aktual)",
+             "Arus": f"{i_prefault:.2f} A", "Tegangan": f"{v_prefault / 1000:.3f} kV"},
+            {"Parameter": "Referensi Dipakai",
+             "Arus": f"{i_ref:.2f} A", "Tegangan": f"{v_ref / 1000:.3f} kV"},
+            {"Parameter": "Threshold Pickup",
+             "Arus": f"{i_pickup:.2f} A  (× 2.0)", "Tegangan": f"{v_pickup / 1000:.3f} kV  (× 0.85)"},
+        ]
+        _tbl(_ref_rows)
+        st.caption(
+            "Fault inception terjadi saat **arus RMS max > arus pickup** "
+            "ATAU **tegangan RMS min < tegangan pickup** (kondisi OR)."
+        )
+
+        # ── Superimposed (jika aktif) ─────────────────────────────────
+        sup = detection.get("superimposed")
+        if sup and sup.get("detected"):
+            st.markdown("##### Superimposed Component Detector")
+            _tbl([
+                {"Parameter": "Superimposed Fault Time", "Nilai": f"{sup.get('fault_time', 0.0):.6f} s"},
+                {"Parameter": "Peak Energy", "Nilai": f"{sup.get('peak_energy', 0.0):.4f}"},
+            ])
+            st.caption(
+                "Metode superimposed mendeteksi lonjakan energi pada komponen ΔV/ΔI "
+                "(sinyal dikurangi referensi pre-fault siklus sebelumnya). "
+                "Jika lebih awal dari RMS inception dan dalam ±2 siklus, dipakai sebagai inception."
+            )
+
+        # ── Langkah Penentuan ─────────────────────────────────────────
+        st.markdown("##### Langkah Penentuan")
+        steps = [
+            "Hitung RMS sliding 1 siklus untuk Ia, Ib, Ic → ambil maksimum tiga fasa.",
+            "Hitung RMS sliding 1 siklus untuk Va, Vb, Vc → ambil minimum tiga fasa.",
+            "Tentukan referensi pre-fault dari median beberapa siklus pertama.",
+            "Bandingkan dengan threshold: arus naik **× 2.0** atau tegangan turun **× 0.85**.",
+            "Indeks pertama yang memenuhi salah satu kondisi = fault inception.",
+            "DFT cursor diletakkan **1 siklus setelah** fault inception untuk kalkulasi fasor.",
+        ]
+        if method == "hybrid_superimposed":
+            steps.insert(4,
+                "Deteksi komponen superimposed (selisih sinyal terhadap pre-fault): "
+                "jika lebih awal dari RMS inception dan dalam range ±2 siklus, dipakai sebagai inception."
+            )
+        for i, s in enumerate(steps, 1):
+            st.markdown(f"{i}. {s}")
+
+        st.caption(
+            "DFT cursor (1 siklus setelah inception) menjadi input fasor untuk Single-End, "
+            "Double-End, HR Check, dan R-X Locus.  \n"
+            "*Referensi: Saha et al. (2010) Sec. 2.3–2.5; IEEE Std C37.114-2014 Sec. 5.2–5.3; "
+            "Phadke & Thorp (2009) Sec. 3.2 & 9.2; Eriksson, Saha & Rockefeller (1985) Sec. II.*"
         )
 
 

@@ -80,31 +80,186 @@ def build_summary_focus_waveform(
     return fig
 
 
-def estimate_summary_disturbance_cause(fault_type_result, high_resistance_result):
-    fault_type = str((fault_type_result or {}).get("fault_type", "")).upper()
+def estimate_summary_disturbance_cause(
+    fault_type_result,
+    high_resistance_result,
+    phasors=None,
+    prefault_phasors=None,
+    single_result=None,
+    two_result=None,
+    two_quality=None,
+    line_param=None,
+):
+    # single_result, two_result, two_quality, line_param reserved for future use
+    """Kembalikan (cause_label: str, detail: dict) berisi basis, penjelasan, referensi, dan catatan."""
+    fault_type   = str((fault_type_result or {}).get("fault_type", "")).upper()
     hr_suspected = bool((high_resistance_result or {}).get("high_resistance_suspected"))
+    rf_est       = float((high_resistance_result or {}).get("Rf_est_ohm") or 0.0)
+    ft_metrics   = (fault_type_result or {}).get("metrics", {}) or {}
+    ft_conf      = float((fault_type_result or {}).get("confidence", 0.0))
+    line_len     = float((line_param or {}).get("length_km") or 0.0)
+
+    # ── helper: ambil magnitude phasor ────────────────────────────────
+    def _mag(d, key):
+        return float((d or {}).get(key, {}).get("magnitude") or 0.0)
+
+    def _num_basis(extra: list) -> list:
+        """Tambah data numerik fault ke basis jika tersedia."""
+        def _row(p, v):
+            return {"Parameter": p, "Nilai": v}
+
+        rows = list(extra)  # extra sudah berupa list of {"Parameter", "Nilai"}
+
+        if ft_conf > 0:
+            rows.append(_row("Keyakinan Klasifikasi Fault Type", f"{ft_conf:.1f} / 10"))
+
+        # Arus dan tegangan fasa terganggu vs pre-fault
+        faulted_phases = (fault_type_result or {}).get("faulted_phases", [])
+        for ph in faulted_phases[:2]:
+            i_key = f"I{ph.lower()}" if ph in "ABC" else None
+            v_key = f"V{ph.lower()}" if ph in "ABC" else None
+            if i_key:
+                i_fault = _mag(phasors, i_key)
+                i_pre   = _mag(prefault_phasors, i_key)
+                v_fault = _mag(phasors, v_key) if v_key else 0.0
+                v_pre   = _mag(prefault_phasors, v_key) if v_key else 0.0
+                if i_fault > 0:
+                    i_ratio = (i_fault / i_pre * 100 - 100) if i_pre > 0 else 0.0
+                    i_str = f"{i_fault:,.1f} A (fault)"
+                    if i_pre > 0:
+                        i_str += f"  ←  {i_pre:,.1f} A (pre-fault),  naik +{i_ratio:.0f}%"
+                    rows.append(_row(f"Arus Fasa {ph}", i_str))
+                if v_fault > 0 and v_pre > 0:
+                    v_drop = (1 - v_fault / v_pre) * 100
+                    rows.append(_row(
+                        f"Tegangan Fasa {ph}",
+                        f"{v_fault / 1000:.2f} kV (fault)  ←  {v_pre / 1000:.2f} kV (pre-fault),  turun {v_drop:.1f}%",
+                    ))
+
+        # IE / arus netral
+        ie_fault = _mag(phasors, "IE")
+        ie_pre   = _mag(prefault_phasors, "IE")
+        if ie_fault > 0:
+            ie_str = f"{ie_fault:,.1f} A (fault)"
+            if ie_pre > 0:
+                ie_str += f"  ←  {ie_pre:,.1f} A (pre-fault)"
+            rows.append(_row("Arus Netral IE", ie_str))
+
+        return rows
 
     if hr_suspected:
+        _hr_angle = float((high_resistance_result or {}).get("angle_deviation_deg") or 0.0)
+        _hr_conf  = float((high_resistance_result or {}).get("analysis_confidence") or 0.0)
         return (
-            "Pohon / benda asing (indikasi resistif)",
-            "Indikasi ini muncul karena pola impedansi terlihat resistif. Tetap validasi dengan inspeksi lapangan.",
+            "Pohon / Benda Asing",
+            {
+                "basis": _num_basis([
+                    {"Parameter": "Fault Type Terdeteksi", "Nilai": fault_type or "tidak terdeteksi"},
+                    {"Parameter": "Resistansi Gangguan (Rf)", "Nilai": f"{rf_est:.1f} Ω — melewati threshold high-resistance"},
+                    {"Parameter": "Deviasi Sudut Impedansi vs Z₁", "Nilai": f"{_hr_angle:.1f}°"},
+                    {"Parameter": "Keyakinan Analisis HR", "Nilai": f"{_hr_conf:.1f} / 10"},
+                ]),
+                "explanation": (
+                    "Gangguan dengan resistansi tinggi umumnya disebabkan kontak pohon, benda asing konduktif, "
+                    "atau tanah kering/berpasir di titik gangguan. Busur api yang panjang juga dapat menghasilkan "
+                    "Rf yang tinggi pada gangguan fase-ke-tanah."
+                ),
+                "references": (
+                    "Saha et al. (2010) Ch. 6 — high-resistance fault analysis; "
+                    "IEEE Std C37.114-2014 Sec. 5.4 — resistive fault detection"
+                ),
+                "note": (
+                    "Validasi dengan inspeksi lapangan dan data cuaca. "
+                    "Rf tinggi bukan bukti mutlak pohon — bisa juga benda asing, busur api panjang, atau kondisi tanah."
+                ),
+            },
         )
 
     if fault_type in ["ABC", "ABCG", "3PH", "3P"]:
         return (
-            "Power swing / gangguan 3 fasa (perlu validasi)",
-            "Gangguan tiga fasa perlu dibandingkan dengan event relay, osilasi daya, dan kondisi sistem.",
+            "Power Swing / Gangguan 3 Fasa",
+            {
+                "basis": _num_basis([
+                    {"Parameter": "Fault Type Terdeteksi", "Nilai": f"{fault_type} — ketiga fasa terganggu bersamaan"},
+                    {"Parameter": "Karakteristik", "Nilai": "Gangguan simetris 3 fasa jarang disebabkan petir — lebih sering akibat power swing atau eskalasi fault"},
+                ]),
+                "explanation": (
+                    "Gangguan tiga fasa simetris dapat disebabkan oleh power swing yang berujung kehilangan sinkronisasi, "
+                    "atau ground fault satu fasa yang berkembang menjadi 3 fasa. "
+                    "Perlu diverifikasi dengan event relay, catatan osilasi daya, dan riwayat pembebanan sistem."
+                ),
+                "references": (
+                    "Anderson (1995) Analysis of Faulted Power Systems Ch. 10; "
+                    "IEEE Std C37.114-2014 Sec. 5.5"
+                ),
+                "note": (
+                    "Bandingkan dengan event CB (Circuit Breaker / pemutus tenaga), SOE (Sequence of Events / log urutan kejadian relay), "
+                    "dan kondisi sistem saat kejadian untuk memastikan penyebab."
+                ),
+            },
         )
 
     if "G" in fault_type and any(phase in fault_type for phase in ["A", "B", "C"]):
-        return (
-            "Petir / flashover satu fasa ke tanah (indikasi awal)",
-            "Gangguan satu fasa ke tanah yang cepat sering cocok dengan flashover/petir, tetapi penyebab final tetap perlu bukti eksternal.",
-        )
+        _n_phases = sum(1 for c in fault_type if c in "ABC")
+        if _n_phases == 1:
+            return (
+                "Petir / Flashover Satu Fasa ke Tanah",
+                {
+                    "basis": _num_basis([
+                        {"Parameter": "Fault Type Terdeteksi", "Nilai": f"{fault_type} — gangguan satu fasa ke tanah"},
+                        {"Parameter": "Resistansi Gangguan (Rf)", "Nilai": f"{'≈ ' + str(round(rf_est, 1)) + ' Ω — ' if rf_est > 0 else ''}rendah/normal, tidak ada indikasi high-resistance"},
+                        {"Parameter": "Statistik", "Nilai": "SLG (Single Line-to-Ground) ≈ 70–80% dari total gangguan transmisi"},
+                    ]),
+                    "explanation": (
+                        "Gangguan satu fasa ke tanah dengan impedansi rendah paling sering disebabkan flashover "
+                        "akibat sambaran petir langsung atau induksi, atau kontak benda asing konduktif yang singkat. "
+                        "Durasi gangguan singkat dan reclosing berhasil mendukung hipotesis flashover petir."
+                    ),
+                    "references": (
+                        "IEEE Std C37.114-2014 Sec. 3.1 — fault classification; "
+                        "Saha et al. (2010) Ch. 2 — SLG (Single Line-to-Ground) fault statistics and characteristics"
+                    ),
+                    "note": (
+                        "Konfirmasi dengan data sambaran petir (lightning arrester counter, BMKG/weather data) "
+                        "dan hasil inspeksi tower di titik gangguan."
+                    ),
+                },
+            )
+        else:
+            return (
+                "Gangguan Multi-Fasa ke Tanah",
+                {
+                    "basis": _num_basis([
+                        {"Parameter": "Fault Type Terdeteksi", "Nilai": f"{fault_type} — lebih dari satu fasa terganggu ke tanah"},
+                        {"Parameter": "Kemungkinan Skenario", "Nilai": "SLG yang berkembang, flashover multi-fasa, atau dua gangguan bersamaan"},
+                    ]),
+                    "explanation": (
+                        "Gangguan dua fasa ke tanah lebih jarang dari SLG (Single Line-to-Ground) dan bisa merupakan eskalasi dari gangguan satu fasa, "
+                        "atau akibat sambaran petir yang memengaruhi lebih dari satu konduktor bersamaan."
+                    ),
+                    "references": (
+                        "IEEE Std C37.114-2014 Sec. 3.1; "
+                        "Anderson (1995) Analysis of Faulted Power Systems Ch. 9"
+                    ),
+                    "note": "Periksa apakah ada dua titik gangguan terpisah atau satu lokasi gangguan multi-fasa.",
+                },
+            )
 
     return (
-        "Belum dapat ditentukan otomatis",
-        "Aplikasi belum melihat pola yang cukup kuat untuk mengklasifikasikan penyebab gangguan.",
+        "Belum Dapat Ditentukan",
+        {
+            "basis": _num_basis([
+                {"Parameter": "Fault Type", "Nilai": fault_type or "tidak terdeteksi"},
+                {"Parameter": "Status", "Nilai": "Pola impedansi dan fault type belum cukup untuk klasifikasi otomatis"},
+            ]),
+            "explanation": (
+                "Data yang tersedia belum memberikan pola yang kuat untuk menentukan penyebab gangguan secara otomatis."
+            ),
+            "references": "",
+            "note": (
+                "Lakukan analisis manual dengan mempertimbangkan data cuaca, riwayat gangguan, dan inspeksi lapangan."
+            ),
+        },
     )
 
 
@@ -161,7 +316,7 @@ def build_summary_location_plot(
                 "label": f"SE {remote_gi_label}",
                 "distance": remote_position["distance_from_local_km"],
                 "score": single_ended_plot_score(remote_single_result),
-                "symbol": "circle-open",
+                "symbol": "circle",
                 "color": "#e67300",
             }
         )
@@ -183,7 +338,7 @@ def build_summary_location_plot(
                 "label": f"DE {remote_gi_label}-{local_gi_label}",
                 "distance": float(reverse_two_result.get("distance_from_original_local_km", reverse_two_result.get("distance_km", 0.0))),
                 "score": float(st.session_state.get("two_ended_reverse_quality", {}).get("quality_score", 10.0)),
-                "symbol": "diamond-open",
+                "symbol": "diamond",
                 "color": "#7c3aed",
             }
         )
@@ -262,9 +417,12 @@ def build_summary_location_plot(
                 label_layout[id(row)] = single_slots[index % len(single_slots)]
 
     for row in marker_rows:
+        _d_remote = line_length - row["Distance km"]
+        _p_remote = _d_remote / line_length * 100.0 if line_length > 0 else 0.0
         row["Label"] = (
             f"<b>{row['Point']}</b><br>"
-            f"{row['Distance km']:.2f} km ({row['Distance %']:.1f}%)<br>"
+            f"{row['Distance km']:.2f} km ({row['Distance %']:.1f}%) dari {local_gi_label}<br>"
+            f"{_d_remote:.2f} km ({_p_remote:.1f}%) dari {remote_gi_label}<br>"
             f"{row['Score']:.1f}/10"
         )
         row["Annotation Ay"], row["Annotation Ax"] = label_layout.get(

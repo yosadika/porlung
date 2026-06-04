@@ -119,7 +119,7 @@ def classify_two_ended_operating_status(
         recommendation = (
             "Jangan jadikan jarak DE dari rekaman ini sebagai jarak gangguan utama. "
             "Gunakan hasil single-ended local/remote sebagai pembanding arah dan besaran, "
-            "lalu validasi dengan rekaman line yang benar-benar terganggu, event CB, SOE, dan proteksi reverse remote. Jika event ini terjadi saat energize, catat sebagai kemungkinan SOTF."
+            "lalu validasi dengan rekaman line yang benar-benar terganggu, event CB (Circuit Breaker / pemutus tenaga), SOE (Sequence of Events / log urutan kejadian), dan proteksi reverse remote. Jika event ini terjadi saat energize, catat sebagai kemungkinan SOTF (Switch-On-to-Fault / gangguan saat masuk tegangan)."
         )
     elif "REMOTE_REVERSE_FAULT" in statuses:
         recommendation = (

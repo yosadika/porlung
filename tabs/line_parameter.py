@@ -10,12 +10,14 @@ from conductor_impedance_importer import (
     detect_impedance_columns,
     extract_impedance_from_row,
 )
+from line_analysis_helpers import override_line_param_length
 from line_parameter import (
     build_line_parameter_dataframe,
     normalize_line_parameter,
 )
 
 
+@st.fragment
 def render():
     st.subheader("Line Parameter Input & Converter")
 
@@ -797,6 +799,52 @@ def render():
                 "Parameter Z1 dan Z0 menggunakan input manual."
             )
 
+    st.markdown("### Sumber Panjang Line untuk Perhitungan SE / DE")
+    st.caption(
+        "Pilihan ini berlaku global untuk semua kalkulasi: "
+        "Single-End (local & remote), Double-End, dan HR Check. "
+        "Klik **Normalize Line Parameter** setelah mengubah pilihan agar Z1_total/Z0_total diperbarui."
+    )
+
+    _tower_length_km = st.session_state.get("tower_schedule_selected_length_km")
+    _tower_length_source = st.session_state.get(
+        "tower_schedule_selected_length_source", "Tower Schedule"
+    )
+    _source_options = ["line_parameter"]
+    if _tower_length_km is not None:
+        _source_options.append("tower_schedule")
+
+    _current_source = st.session_state.get("line_length_source", "line_parameter")
+    if _current_source not in _source_options:
+        _current_source = "line_parameter"
+
+    st.selectbox(
+        "Sumber panjang line",
+        _source_options,
+        index=_source_options.index(_current_source),
+        format_func=lambda v: {
+            "line_parameter": f"Line Parameter ({float(line_length):.5f} {length_unit})",
+            "tower_schedule": (
+                f"Tower Schedule ({float(_tower_length_km):.6f} km — {_tower_length_source})"
+                if _tower_length_km is not None
+                else "Tower Schedule belum tersedia"
+            ),
+        }[v],
+        key="line_length_source",
+    )
+
+    if st.session_state.get("line_length_source") == "tower_schedule" and _tower_length_km is not None:
+        st.info(
+            f"Setelah Normalize, panjang efektif yang dipakai: "
+            f"**{float(_tower_length_km):.6f} km** (Tower Schedule). "
+            "Z1_total/Z0_total = Z1_per_km/Z0_per_km × panjang Tower Schedule."
+        )
+    elif _tower_length_km is None:
+        st.caption(
+            "Tower Schedule belum dimuat. Load dan filter di tab Tower Schedule "
+            "jika ingin memakai panjang saluran dari tower."
+        )
+
     st.markdown("### Normalize Parameter")
 
     if st.button("Normalize Line Parameter"):
@@ -829,10 +877,26 @@ def render():
 
             line_param_df = build_line_parameter_dataframe(line_param)
 
+            # Terapkan sumber panjang yang dipilih
+            _sel_now = st.session_state.get("line_length_source", "line_parameter")
+            _tkm_now = st.session_state.get("tower_schedule_selected_length_km")
+            _tsrc_now = st.session_state.get(
+                "tower_schedule_selected_length_source", "Tower Schedule"
+            )
+            if _sel_now == "tower_schedule" and _tkm_now is not None:
+                _eff = override_line_param_length(
+                    line_param, float(_tkm_now), f"Tower Schedule — {_tsrc_now}"
+                )
+            else:
+                _eff = dict(line_param)
+                _eff["length_source"] = "Line Parameter"
+
             st.session_state["line_param"] = line_param
             st.session_state["line_param_df"] = line_param_df
+            st.session_state["effective_line_param"] = _eff
 
             st.success("Parameter saluran berhasil dinormalisasi.")
+            st.rerun(scope="app")
 
         except Exception as e:
             st.error("Normalisasi parameter saluran gagal.")
@@ -841,17 +905,23 @@ def render():
     if "line_param" in st.session_state:
         line_param = st.session_state["line_param"]
         line_param_df = st.session_state["line_param_df"]
+        effective_line_param = st.session_state.get("effective_line_param", line_param)
 
         st.markdown("### Normalized Line Parameter")
 
         col_n1, col_n2, col_n3 = st.columns(3)
 
         col_n1.metric("Line Name", line_param["line_name"])
-        col_n2.metric("Length", f'{line_param["length_km"]:.3f} km')
+        col_n2.metric(
+            "Length",
+            f'{effective_line_param["length_km"]:.6f} km',
+            help=f'Sumber: {effective_line_param.get("length_source", "Line Parameter")}',
+        )
         col_n3.metric("Base Side", line_param["base_side"])
 
+        effective_param_df = build_line_parameter_dataframe(effective_line_param)
         st.dataframe(
-            line_param_df.style.format(
+            effective_param_df.style.format(
                 {
                     "Real": lambda x: "" if pd.isna(x) else f"{x:.6f}",
                     "Imag": lambda x: "" if pd.isna(x) else f"{x:.6f}",
@@ -864,16 +934,17 @@ def render():
 
         st.markdown("### Ringkasan untuk Perhitungan Jarak Gangguan")
 
-        z1 = line_param["Z1_per_km"]
-        z0 = line_param["Z0_per_km"]
-        k0 = line_param["K0"]
+        z1 = effective_line_param["Z1_per_km"]
+        z0 = effective_line_param["Z0_per_km"]
+        k0 = effective_line_param["K0"]
 
         st.code(
             f"""
             Z1_per_km = {z1.real:.6f} + j{z1.imag:.6f} ohm/km
             Z0_per_km = {z0.real:.6f} + j{z0.imag:.6f} ohm/km
             K0        = {k0.real:.6f} + j{k0.imag:.6f}
-            Length    = {line_param["length_km"]:.3f} km
+            Length    = {effective_line_param["length_km"]:.6f} km  ({effective_line_param.get("length_source", "Line Parameter")})
             """,
             language="text",
         )
+

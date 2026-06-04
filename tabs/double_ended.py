@@ -88,6 +88,7 @@ def render():
             fault_detection_key="fault_detection",
             key_prefix="de_local_fc",
             compact=True,
+            settings_source_prefix="local_fc",
         )
     with st.expander("Remote Fault Cursor", expanded=False):
         if "remote_assigned_df" not in st.session_state:
@@ -102,29 +103,12 @@ def render():
                 fault_detection_key="remote_fault_detection",
                 key_prefix="de_remote_fc",
                 compact=True,
+                settings_source_prefix="remote_fc",
             )
 
     local_phasors = st.session_state["phasors"]
     line_param_original = st.session_state["line_param"]
-    tower_length_km = st.session_state.get("tower_schedule_selected_length_km")
-    tower_length_source = st.session_state.get("tower_schedule_selected_length_source", "Tower Schedule")
-    length_source_options = ["line_parameter"]
-    if tower_length_km is not None:
-        length_source_options.append("tower_schedule")
-
-    current_length_source = st.session_state.get("two_ended_line_length_source", "line_parameter")
-    if current_length_source not in length_source_options:
-        current_length_source = "line_parameter"
-
-    if current_length_source == "tower_schedule" and tower_length_km is not None:
-        line_param = override_line_param_length(
-            line_param_original,
-            float(tower_length_km),
-            f"Tower Schedule - {tower_length_source}",
-        )
-    else:
-        line_param = dict(line_param_original)
-        line_param["length_source"] = "Line Parameter"
+    line_param = st.session_state.get("effective_line_param") or dict(line_param_original)
 
     st.markdown("### Local End Data")
 
@@ -622,36 +606,11 @@ def render():
         f"{remote_gi_label} sebagai sisi remote. Jika belum sesuai, ubah Line Name di tab Line Parameter."
     )
 
-    selected_de_length_source = st.selectbox(
-        "Sumber panjang line untuk kalkulasi DE",
-        length_source_options,
-        index=length_source_options.index(current_length_source),
-        format_func=lambda value: {
-            "line_parameter": (
-                f"Line Parameter ({line_param_original['length_km']:.6f} km)"
-            ),
-            "tower_schedule": (
-                f"Tower Schedule ({float(tower_length_km):.6f} km - {tower_length_source})"
-                if tower_length_km is not None
-                else "Tower Schedule belum tersedia"
-            ),
-        }[value],
-        key="two_ended_line_length_source",
-        help=(
-            "Pilih Tower Schedule jika panjang saluran dari tabel tower lebih akurat daripada "
-            "panjang pada Line Parameter. Data Tower Schedule harus dimuat dan difilter dahulu."
-        ),
+    st.caption(
+        f"Panjang line yang digunakan: **{line_param['length_km']:.6f} km** "
+        f"(sumber: {line_param.get('length_source', 'Line Parameter')}). "
+        "Untuk mengubah sumber panjang line, gunakan selector di tab **Line**."
     )
-    if selected_de_length_source == "tower_schedule" and tower_length_km is not None:
-        st.info(
-            f"Kalkulasi DE memakai panjang Tower Schedule: {float(tower_length_km):.6f} km. "
-            "Z1_total/Z0_total dihitung ulang dari impedansi per km."
-        )
-    elif tower_length_km is None:
-        st.caption(
-            "Panjang Tower Schedule belum tersedia. Load dan filter data di tab Tower Schedule "
-            "jika ingin memakai panjang saluran dari tower."
-        )
 
     remote_direction_mode = st.selectbox(
         "Remote Record Adaptation",
@@ -1007,14 +966,32 @@ def render():
         operating_status = st.session_state.get("two_ended_operating_status")
         if operating_status:
             st.markdown("### Status Diagnostik Rekaman")
-            status_text = ", ".join(operating_status.get("statuses", []))
-            if operating_status.get("can_use_de_distance"):
-                st.success(f"Status: {status_text}")
-            else:
-                st.warning(f"Status: {status_text}")
-            for note in operating_status.get("notes", []):
-                st.info(note)
-            st.caption(operating_status.get("recommendation", ""))
+            _STATUS_LABEL = {
+                "NORMAL_INTERNAL_LINE_FAULT":          "✅  Gangguan internal saluran — hasil DE dapat digunakan",
+                "BACKFEED_OR_REVERSE_FAULT_SUSPECTED": "⚠️  Backfeed / reverse fault diduga — gangguan mungkin di luar saluran ini",
+                "EXTERNAL_TO_IMPORTED_LINE_SUSPECTED": "⚠️  Gangguan diduga berasal dari saluran lain yang diimpor",
+                "DE_NOT_APPLICABLE_FOR_IMPORTED_LINE": "🚫  Hasil DE tidak berlaku — jarak di luar saluran atau rekaman tidak sesuai",
+                "REMOTE_REVERSE_FAULT":                "⚠️  Arus remote menunjukkan arah reverse — relay remote melihat fault di belakang terminal",
+            }
+            _can_use = operating_status.get("can_use_de_distance", True)
+            _statuses = operating_status.get("statuses", [])
+            _notes    = operating_status.get("notes", [])
+            _rec      = operating_status.get("recommendation", "")
+
+            for _s in _statuses:
+                _label = _STATUS_LABEL.get(_s, _s)
+                if _can_use:
+                    st.success(_label)
+                else:
+                    st.warning(_label)
+
+            if _notes:
+                with st.expander("Detail kondisi yang terdeteksi", expanded=False):
+                    for _note in _notes:
+                        st.markdown(f"- {_note}")
+
+            if _rec:
+                st.info(f"**Rekomendasi:** {_rec}")
         if two_comparison_df is not None:
             st.markdown("### Perbandingan Double-Ended Dua Arah")
             st.dataframe(
@@ -1219,9 +1196,9 @@ def render():
                 st.warning(f"Remote GI single-ended comparison: {warning}")
 
         if two_quality["warnings"]:
-            st.markdown("### Warning")
+            st.markdown("### Perhatian — Hasil Perlu Diverifikasi")
             for warning in two_quality["warnings"]:
-                st.warning(warning)
+                st.warning(f"⚠️ {warning}")
 
         st.markdown("### Line Position Visualization")
 
@@ -1250,7 +1227,7 @@ def render():
                     "Score": two_reverse_quality["quality_score"] if two_reverse_quality else 0.0,
                     "Track": "Double-ended",
                     "Color": "#7c3aed",
-                    "Symbol": "diamond-open",
+                    "Symbol": "diamond",
                 }
             )
 
@@ -1280,7 +1257,7 @@ def render():
                     "Score": single_ended_plot_score(st.session_state["two_ended_remote_single_result"]),
                     "Track": "Single-ended",
                     "Color": "#d97706",
-                    "Symbol": "circle-open",
+                    "Symbol": "circle",
                 }
             )
 
@@ -1369,9 +1346,12 @@ def render():
                 .replace("Single-ended", "SE")
             )
             row["Legend Name"] = short_name
+            _d_remote = L - row["Distance km"]
+            _p_remote = _d_remote / L * 100.0 if L > 0 else 0.0
             row["Label"] = (
                 f"<b>{short_name}</b><br>"
-                f"{row['Distance km']:.2f} km ({row['Distance %']:.1f}%)<br>"
+                f"{row['Distance km']:.2f} km ({row['Distance %']:.1f}%) dari {local_gi_label}<br>"
+                f"{_d_remote:.2f} km ({_p_remote:.1f}%) dari {remote_gi_label}<br>"
                 f"{row['Score']:.1f}/10"
             )
             row["Annotation Ay"], row["Annotation Ax"] = label_layout.get(
@@ -1474,7 +1454,8 @@ def render():
                     showlegend=True,
                     hovertemplate=(
                         f"{row['Point']}<br>"
-                        f"{row['Distance km']:.2f} km ({row['Distance %']:.1f}%)<br>"
+                        f"{row['Distance km']:.2f} km ({row['Distance %']:.1f}%) dari {local_gi_label}<br>"
+                        f"{L - row['Distance km']:.2f} km ({(L - row['Distance km']) / L * 100:.1f}%) dari {remote_gi_label}<br>"
                         f"Score {row['Score']:.1f}/10"
                         "<extra></extra>"
                     ),
@@ -1526,11 +1507,12 @@ def render():
                     name=row["Legend Name"],
                     showlegend=False,
                     legendgroup=row["Point"],
-                    customdata=[[row["Point"], row["Distance km"], row["Distance %"], row["Score"]]],
+                    customdata=[[row["Point"], row["Distance km"], row["Distance %"], L - row["Distance km"], (L - row["Distance km"]) / L * 100.0 if L > 0 else 0.0, row["Score"]]],
                     hovertemplate=(
                         "%{customdata[0]}<br>"
-                        "%{customdata[1]:.2f} km (%{customdata[2]:.1f}%)<br>"
-                        "Score %{customdata[3]:.1f}/10"
+                        f"%{{customdata[1]:.2f}} km (%{{customdata[2]:.1f}}%) dari {local_gi_label}<br>"
+                        f"%{{customdata[3]:.2f}} km (%{{customdata[4]:.1f}}%) dari {remote_gi_label}<br>"
+                        "Score %{customdata[5]:.1f}/10"
                         "<extra></extra>"
                     ),
                 ),
@@ -1643,7 +1625,21 @@ def render():
             col=1,
         )
 
-        st.plotly_chart(fig_two, use_container_width=True)
+        st.plotly_chart(fig_two, use_container_width=True, config={
+            "editable": True,
+            "edits": {
+                "annotationPosition": True,
+                "annotationTail": True,
+                "annotationText": False,
+                "axisTitleText": False,
+                "titleText": False,
+                "legendText": False,
+                "legendPosition": False,
+                "shapePosition": False,
+                "colorbarPosition": False,
+                "colorbarTitleText": False,
+            },
+        })
 
         if "two_ended_candidates" in st.session_state:
             st.markdown("### Auto Adaptation Candidates")

@@ -3,6 +3,7 @@
 Aplikasi Streamlit untuk analisis gangguan transmisi tenaga listrik. Membaca rekaman COMTRADE, menentukan fault type, menghitung lokasi gangguan single-end dan double-end, menggambar R-X locus, serta menampilkan tower schedule dan cuaca di titik gangguan.
 
 **Spesifikasi lengkap:** [`PRD.md`](PRD.md)  
+**Algoritma & rumus (fault cursor, SE, DE, HR):** [`FORMULAS.md`](FORMULAS.md) — sumber kebenaran matematis; perbarui saat formula di kode berubah, jangan duplikasi rumus di PRD/CLAUDE  
 **Riwayat keputusan & guardrail:** [`memory/MEMORY.md`](memory/MEMORY.md) — baca sebelum mengubah kode
 
 ## Stack
@@ -20,8 +21,9 @@ Aplikasi Streamlit untuk analisis gangguan transmisi tenaga listrik. Membaca rek
 |---|---|
 | `app.py` | Entry point, sidebar upload, tab utama, CSS global |
 | `app_runtime.py` | Cache COMTRADE/Sheets, query tower schedule, monkey-patch dataframe |
-| `app_helpers.py` | Helper umum lintas fitur (downsampling, validasi, normalisasi); konstanta `OHM = chr(0x03A9)` |
-| `case_storage.py` | Runtime credentials, save/restore case ZIP; `CASE_SETTINGS_KEYS` menjamin kunci konfigurasi selalu tersimpan |
+| `app_helpers.py` | Helper umum lintas fitur (downsampling, validasi, normalisasi); konstanta `OHM = chr(0x03A9)`; `cached_style_format()` untuk cache `.style.format()` |
+| `auto_assignment.py` | Deteksi otomatis channel tegangan/arus dari COMTRADE; scoring dengan suffix/prefix match (bukan substring sembarangan) |
+| `case_storage.py` | Runtime credentials, save/restore case ZIP; `CASE_SETTINGS_KEYS` menjamin kunci konfigurasi selalu tersimpan; `_WIDGET_RESTORE_CLEANUP_KEYS`/`_WIDGET_RESTORE_CLEANUP_PREFIXES` mencegah widget key masuk restore |
 | `weather_services.py` | API cuaca (OpenWeather, Open-Meteo), formatter data |
 | `weather_ui.py` | HTML kartu cuaca, icon, tren suhu, bar peluang hujan |
 | `tower_map.py` | Interpolasi fault pada jalur tower, render Folium map, tabel tower dengan badge proteksi |
@@ -30,11 +32,11 @@ Aplikasi Streamlit untuk analisis gangguan transmisi tenaga listrik. Membaca rek
 | `waveform_helpers.py` | Plot waveform, phasor diagram, sync local/remote; `build_synchronized_fault_plot` mendukung dual subplot tegangan+arus |
 | `single_ended.py` | Kalkulasi SE: loop impedansi, reactance/magnitude/projection method, Takagi fallback (Rf compensation) |
 | `two_ended.py` | Kalkulasi DE: positive-sequence two-ended, quality scoring, candidate ranking, angle search untuk unsync |
-| `fault_workflow_helpers.py` | Explanation text, threshold fault type, TWS location, timestamp parser; `render_se_formula_expander()`; `render_hr_formula_expander()` |
-| `summary_helpers.py` | Waveform fokus Summary, scoring SE/DE, grafik posisi SE/DE |
-| `tabs/line_parameter.py` | Render tab Line |
-| `tabs/double_ended.py` | Render tab Double-End; `render_de_formula_expander()` |
-| `tabs/signal_assignment.py` | Render sub-tab Signals di Local End |
+| `fault_workflow_helpers.py` | Explanation text, threshold fault type, TWS location, timestamp parser; `render_se_formula_expander()`; `render_hr_formula_expander()`; `render_fault_cursor_explanation()` (dasar penentuan fault cursor dalam tabel + referensi literatur); `render_fault_cursor(..., settings_source_prefix)` — DE membaca pengaturan dari Local/Remote End; `_sync_checkbox`/`_FC_SYNC_PARTNERS` sinkron checkbox auto 2 arah |
+| `summary_helpers.py` | Waveform fokus Summary, scoring SE/DE, grafik posisi SE/DE; `build_de_position_figure()`/`build_summary_location_plot()` (label both-GI, marker filled); `estimate_summary_disturbance_cause()` return `(label, detail_dict)` untuk Estimasi Penyebab otomatis (tabel basis + referensi) |
+| `tabs/line_parameter.py` | Render tab Line; **satu-satunya** selector sumber panjang line (`line_length_source`); simpan `effective_line_param` ke session_state; `@st.fragment` |
+| `tabs/double_ended.py` | Render tab Double-End; `render_de_formula_expander()`; `@st.fragment`; plot Line Position draggable + label both-GI; Status Diagnostik human-readable; fault cursor compact pakai `settings_source_prefix` |
+| `tabs/signal_assignment.py` | Render sub-tab Signals di Local End — **TIDAK `@st.fragment`** karena mengubah `assigned_df` yang menjadi fondasi semua kalkulasi |
 
 ## Aturan Wajib
 
@@ -51,10 +53,50 @@ Aplikasi Streamlit untuk analisis gangguan transmisi tenaga listrik. Membaca rek
    - Tower Map Summary: default fault source = DE jika tersedia
 7. **Setelah perubahan apapun**, jalankan:
    ```
-   python -m py_compile app.py app_runtime.py app_helpers.py case_storage.py weather_services.py weather_ui.py tower_map.py rx_locus.py line_analysis_helpers.py waveform_helpers.py fault_workflow_helpers.py summary_helpers.py single_ended.py two_ended.py tabs/line_parameter.py tabs/double_ended.py tabs/signal_assignment.py
+   python -m py_compile app.py app_runtime.py app_helpers.py auto_assignment.py case_storage.py weather_services.py weather_ui.py tower_map.py rx_locus.py line_analysis_helpers.py waveform_helpers.py fault_workflow_helpers.py summary_helpers.py single_ended.py two_ended.py high_resistance.py fault_detection.py fault_type.py phasor.py comtrade_reader.py tabs/line_parameter.py tabs/double_ended.py tabs/signal_assignment.py
    ```
 8. **Setelah perubahan workflow**, validasi minimal: Summary, Setup DB, Local End, Remote End, Line, HR Check, Single-End, Double-End, R-X Locus.
 9. **Setelah perubahan kalkulasi**, validasi: SE/DE memakai sumber panjang line yang dipilih, Tower Map fault interpolasi memakai `KUMULATIF km`, Summary tidak blank bila kalkulasi belum lengkap.
+
+## Arsitektur Fragment (`@st.fragment`)
+
+Beberapa fungsi render menggunakan `@st.fragment` agar perubahan dropdown tidak memicu full app rerun:
+
+| Fragment | File | `st.rerun(scope="app")` dipanggil saat |
+|---|---|---|
+| `render()` | `tabs/line_parameter.py` | Normalize diklik |
+| `render()` | `tabs/double_ended.py` | Calculate DE diklik |
+| `render_single_ended_analysis` | `app.py` | Calculate SE diklik |
+| `render_high_resistance_check` | `app.py` | — (display only) |
+| `render_simple_rx_locus` | `app.py` | — (display only) |
+
+**`tabs/signal_assignment.py` TIDAK di-fragment** — mengubah channel atau CT/VT ratio mengubah `assigned_df` yang menjadi fondasi phasor, SE, DE. Tanpa full rerun, downstream state menjadi stale dan kalkulasi salah.
+
+**Aturan fragment:** hanya gunakan jika perubahan widget di dalam TIDAK mempengaruhi state yang dibaca tab/fungsi lain, ATAU ada `st.rerun(scope="app")` setelah perubahan penting.
+
+## Sumber Panjang Line (`effective_line_param`)
+
+Selector sumber panjang line (Line Parameter vs Tower Schedule) **hanya** ada di **tab Line** — sudah dihapus dari halaman SE dan DE. Hasilnya disimpan ke `st.session_state["effective_line_param"]`. SE, DE, **HR Check**, dan R-X Locus membaca dari key ini via `resolve_end_analysis_context` (`effective_line_param or line_param`) — tidak ada kalkulasi ulang per-tab.
+
+- Halaman SE/DE hanya menampilkan **caption** panjang line aktif + arahan ke tab Line (tidak ada widget pilih sumber).
+- Perubahan selector → simpan pilihan saja (tidak hitung)
+- Klik Normalize → hitung `effective_line_param` dan trigger `st.rerun(scope="app")`
+- Jika `effective_line_param` tidak ada di session_state, fallback ke `line_param`
+
+## Cache Version Bumping
+
+Figure yang di-cache di session_state (`_de_viz_fig`, `_sloc_key`, `_summary_rx_cache`) menyertakan key versi/parameter di cache key. Saat label/format figure diubah, **bump versi string** agar cache lama otomatis dibuang. `_sloc_key` saat ini `"v3"`. **Cache figure yang dipengaruhi pilihan zona/relay (R-X Locus Summary) wajib menyertakan semua key relay** (`rx_locus_setting_row_*`, substation, bay, show_zone, zone_setting_base) — kalau tidak, Summary menyajikan figure stale.
+
+## Plot Line Position Visualization (DE & Summary)
+
+- Label annotation **draggable** via `st.plotly_chart(..., config={"editable": True, "edits": {...}})`. `edits` mengaktifkan hanya `annotationPosition`/`annotationTail`; `titleText`/`axisTitleText`/`legendText` di-`False` agar teks "Click to enter..." tidak muncul.
+- **JANGAN implementasi auto-placement label kompleks** (free-zone, candidate offset) — terbukti boros iterasi & overthinking. Draggable bawaan Plotly lebih reliable.
+- Label & hover menampilkan jarak dari **kedua GI** (lokal + remote). Semua marker **filled** (tanpa `-open`); distinksi lokal/remote lewat warna.
+
+## Sinkronisasi Fault Cursor Local/Remote ↔ DE
+
+- DE memanggil `render_fault_cursor(..., settings_source_prefix="local_fc"/"remote_fc")` → tidak render widget parameter, baca nilai dari halaman Local/Remote End. `fault_window`/`remote_fault_window` adalah key session_state bersama (dipakai juga R-X Locus).
+- Checkbox "Gunakan deteksi otomatis" sinkron **dua arah** via `_sync_checkbox(src, dst)` (callback `on_change` set partner = nilai sama) + dict `_FC_SYNC_PARTNERS`. Checkbox **tanpa `value=`** (murni dari session_state). Jangan pakai pola delete-key + `value=partner` → menyebabkan inversi.
 
 ## Risiko yang Perlu Diperhatikan
 
@@ -62,6 +104,10 @@ Aplikasi Streamlit untuk analisis gangguan transmisi tenaga listrik. Membaca rek
 - CSS/DOM selector Streamlit bawaan rapuh; scope selector ke class komponen.
 - Folium map: gunakan `key`, `center`, `zoom` eksplisit saat ingin fokus ke titik fault.
 - Summary dirender lebih awal; hasil kalkulasi yang dihitung setelahnya baru tampil pada rerun berikutnya.
+- Fragment + session_state: perubahan di dalam fragment baru terlihat tab lain setelah full rerun. Selalu pastikan `st.rerun(scope="app")` dipanggil setelah perubahan penting.
+- **Sync sidebar→widget lintas-tab: authoritative** (set tiap run saat filter aktif, sebelum tabs render) lebih reliable dari change-guard yang rapuh terhadap restore. R-X Locus substation/bay di-set tiap run dari sidebar bila `_sb_ia` aktif.
+- **Selectbox: jangan campur `index=` + `key=`** bila session_state di-set dari luar → konflik. Pakai `key=` saja + seed default ke session_state bila kosong/invalid (lihat R-X Locus substation).
+- **Normalisasi nilai numerik konsisten** antara sumber & konsumen: `"1.0"` (spreadsheet) vs `"1"` (sidebar `_nv`) — gunakan helper normalisasi sama (`_nv_line`) saat mencocokkan.
 
 ## Efisiensi Token (berlaku untuk semua sesi)
 

@@ -142,18 +142,37 @@ def evaluate_two_ended_quality(result: dict, line_param: dict):
     boundary_margin = 0.002 * L
 
     if d < -boundary_margin:
-        warnings.append("Jarak negatif. Kemungkinan arah arus remote/local terbalik atau gangguan di luar saluran.")
+        warnings.append(
+            "Hasil jarak bernilai negatif — titik gangguan berada di luar ujung saluran yang dianalisis. "
+            "Hal ini biasanya terjadi jika polaritas arus remote atau lokal terbalik, "
+            "atau jika gangguan sebenarnya berada di luar saluran ini (eksternal/backfeed). "
+            "Periksa kembali arah CT dan mapping channel di tab Signal Assignment."
+        )
         score -= 4.0
 
     if d > L + boundary_margin:
-        warnings.append("Jarak melebihi panjang saluran. Cek arah CT, mapping channel, atau kemungkinan gangguan eksternal.")
+        warnings.append(
+            "Hasil jarak melebihi panjang saluran — titik gangguan berada di luar ujung remote saluran. "
+            "Kemungkinan penyebab: polaritas CT terbalik, channel arus salah dipetakan, "
+            "atau gangguan sebenarnya berada di saluran lain yang terhubung ke terminal remote. "
+            "Periksa Signal Assignment dan pastikan rekaman berasal dari saluran yang sama."
+        )
         score -= 4.0
 
     if imag_d > 0.05 * L:
-        warnings.append("Komponen imajiner hasil jarak cukup besar. Sinkronisasi atau arah arus mungkin belum tepat.")
+        warnings.append(
+            "Hasil perhitungan jarak mengandung komponen imajiner yang signifikan (> 5% panjang saluran). "
+            "Ini mengindikasikan rekaman lokal dan remote belum tersinkronisasi dengan baik, "
+            "atau ada perbedaan sudut referensi antara kedua rekaman. "
+            "Coba metode sinkronisasi visual atau sesuaikan DFT (Discrete Fourier Transform) cursor remote di tab Double-End."
+        )
         score -= 2.0
     elif imag_d > 0.02 * L:
-        warnings.append("Komponen imajiner hasil jarak masih terlihat. Validasi sinkronisasi rekaman.")
+        warnings.append(
+            "Hasil perhitungan jarak mengandung komponen imajiner kecil (2–5% panjang saluran). "
+            "Ini bisa disebabkan oleh sinkronisasi rekaman yang belum sempurna atau noise pada sinyal. "
+            "Validasi posisi DFT (Discrete Fourier Transform) cursor remote dan pastikan waveform lokal–remote sudah sejajar."
+        )
         score -= 0.5
 
     if result["voltage_mismatch_magnitude"] > 0:
@@ -166,10 +185,19 @@ def evaluate_two_ended_quality(result: dict, line_param: dict):
         mismatch_ratio = result["voltage_mismatch_magnitude"] / vf_mag
 
         if mismatch_ratio > 0.10:
-            warnings.append("Mismatch tegangan fault dari kedua ujung cukup besar.")
+            warnings.append(
+                "Tegangan di titik gangguan yang dihitung dari sisi lokal dan remote berbeda cukup besar (> 10%). "
+                "Perbedaan ini bisa disebabkan oleh sinkronisasi rekaman yang kurang akurat, "
+                "parameter impedansi saluran yang tidak sesuai, atau perbedaan rasio CT/VT antar ujung. "
+                "Verifikasi parameter line dan pengaturan transformer di kedua ujung."
+            )
             score -= 1.5
         elif mismatch_ratio > 0.05:
-            warnings.append("Mismatch tegangan fault kecil tetapi masih perlu divalidasi.")
+            warnings.append(
+                "Tegangan di titik gangguan dari sisi lokal dan remote sedikit berbeda (5–10%). "
+                "Hasil DE masih dapat digunakan, namun disarankan memverifikasi "
+                "kualitas sinkronisasi waveform dan parameter impedansi saluran."
+            )
             score -= 0.5
     else:
         mismatch_ratio = 0.0

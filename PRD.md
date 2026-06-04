@@ -2,6 +2,8 @@
 
 Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku aplikasi, kontrak UI/backend, dan arsitektur modul. Gunakan dokumen ini sebagai referensi sebelum melakukan perubahan apapun.
 
+**Algoritma & rumus detail** (fault cursor, SE, DE, HR) ada di [`FORMULAS.md`](FORMULAS.md) — PRD merujuk ke sana, tidak menyalin ulang rumus.
+
 **Jangan hapus atau ubah fitur di dokumen ini tanpa konfirmasi eksplisit dari user.**
 
 ---
@@ -134,6 +136,8 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Metode deteksi: RMS sliding 1 siklus, kenaikan RMS arus, penurunan RMS tegangan, optional superimposed detection, optional refine fault bar.
 - Auto threshold memperhatikan prefault RMS, nominal jika tersedia, kondisi prefault voltage rendah atau current tinggi.
 - **Fault inception** dipakai untuk sinkronisasi visual/record. **DFT cursor** dipakai untuk phasor dan locus fault point. Jangan pertukarkan kedua peran ini.
+- Expander **"Dasar Penentuan Fault Cursor"** (`render_fault_cursor_explanation`) muncul di bawah plot fault window (Local End, Remote End, dan DE) berisi tabel: Hasil Deteksi (waktu inception, confidence, metode, DFT cursor, fault bar refinement), Referensi Pre-fault & Threshold Pickup (arus/tegangan aktual, referensi dipakai, pickup ×2.0/×0.85), tabel Superimposed bila hybrid aktif, langkah penentuan bernomor, dan referensi literatur (Saha 2010 Sec. 2.3–2.5; IEEE C37.114-2014 Sec. 5.2–5.3; Phadke & Thorp 2009 Sec. 3.2 & 9.2; Eriksson dkk 1985 Sec. II).
+- **Sinkronisasi pengaturan fault cursor Local/Remote End ↔ DE:** di halaman DE, fault cursor compact membaca pengaturan dari halaman Local/Remote End (`settings_source_prefix`). Checkbox "deteksi otomatis" dapat diatur di kedua halaman dan **sinkron dua arah**. `fault_window`/`remote_fault_window` adalah key session_state bersama sehingga hasil selalu konsisten.
 
 ---
 
@@ -164,6 +168,10 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Konversi panjang via `convert_length_to_km` (meter/kilometer/mile).
 - Impedansi dapat dibangun dari: R/X, magnitude/angle, X dan phi, primary/secondary dengan konversi CT/VT.
 - Nama GI local dan remote diinfer dari `line_name`; jika tidak sesuai, user harus memperbaiki line parameter.
+- **Sumber panjang line untuk kalkulasi:** selector global ada di tab Line (sebelum Normalize). Pilihan: `line_parameter` atau `tower_schedule`. Hasil disimpan ke `st.session_state["effective_line_param"]`.
+- `effective_line_param` adalah dict identik `line_param` kecuali `length_km`, `Z1_total`, `Z0_total` yang sudah dioverride sesuai sumber yang dipilih.
+- SE, DE, dan HR Check **selalu membaca dari `effective_line_param`**, bukan langsung dari `line_param`. Jika `effective_line_param` belum ada, fallback ke `line_param`.
+- Perubahan selector sumber panjang **tidak langsung menghitung** — baru dihitung saat Normalize diklik, lalu `st.rerun(scope="app")` memperbarui semua tab.
 
 ---
 
@@ -207,13 +215,9 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 ## High Resistance Check
 
 - Sub-view local dan remote. Judul end memakai nama GI/lokasi.
-- Loop impedance sesuai fault type:
-  - ground loop: `Va/(Ia + K0*I0)`, `Vb/(Ib + K0*I0)`, `Vc/(Ic + K0*I0)`
-  - phase loop: `(Va-Vb)/(Ia-Ib)`, `(Vb-Vc)/(Ib-Ic)`, `(Vc-Va)/(Ic-Ia)`
-  - 3 phase fallback: `Va/Ia`
-- Distance pembanding: magnitude `|Zapp|/|Z1_per_km|`, reactance `Imag(Zapp)/Imag(Z1_per_km)`, projection ke arah sudut Z1.
-- Estimasi Rf: `Zline_est = distance_x * Z1_per_km`, `Rf_est = Real(Zapp - Zline_est)`.
-- Indikator HR: `Rf_est >= threshold`, deviasi sudut Zapp terhadap Z1, deviasi distance magnitude vs reactance, distance keluar line.
+- Memakai `effective_line_param` (sumber panjang line dari tab Line) via `resolve_end_analysis_context` — konsisten dengan SE/DE/R-X Locus.
+- Loop impedance per fault type (ground loop, phase loop, 3-phase fallback), tiga metode jarak (magnitude/reactance/projection), dan estimasi Rf — **rumus di [`FORMULAS.md`](FORMULAS.md) Sec. 4** (loop & jarak identik SE Sec. 2.1–2.2).
+- Indikator HR: Rf_est ≥ threshold, deviasi sudut Zapp vs Z1, deviasi distance magnitude vs reactance, distance keluar line. Nilai threshold default → FORMULAS.md Sec. 4.
 - Confidence 0–10 dan evidence score ditampilkan.
 - Simbol ohm harus tampil sebagai `Ω`, bukan karakter rusak.
 - Formula expander `render_hr_formula_expander()` menampilkan: loop impedansi, Zapp, tiga metode jarak, estimasi Rf, deviasi sudut, dan logika deteksi HR dengan nilai aktual inline.
@@ -223,15 +227,12 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 ## Single-End Fault Locator
 
 - Sub-view local dan remote.
-- Input: phasor fault, prefault phasor jika tersedia, fault type, line parameter efektif, sumber panjang line.
-- Sumber panjang line: Line Parameter atau Tower Schedule jika sudah dimuat/difilter.
-- Jika memakai Tower Schedule: `length_km`, `Z1_total`, `Z0_total` dihitung ulang dari `Z1_per_km/Z0_per_km`.
-- Jika sumber panjang line berubah setelah hasil dihitung, halaman memberi warning agar user menghitung ulang.
-- Loop impedance: sama dengan HR (ground loop, phase loop, 3-phase fallback).
-- Distance method: magnitude, reactance, projection. **Recommended default: reactance.**
+- Input: phasor fault, prefault phasor jika tersedia, fault type, `effective_line_param`.
+- **Sumber panjang line tidak dipilih di halaman SE** — selalu memakai `effective_line_param` yang ditetapkan di tab Line (via `resolve_end_analysis_context`). Halaman SE hanya menampilkan caption panjang line aktif + arahan ke tab Line.
+- Loop impedance per fault type + tiga metode jarak (magnitude/reactance/projection). **Recommended default: reactance.** Rumus → [`FORMULAS.md`](FORMULAS.md) Sec. 2.1–2.2.
 - Fault context: internal line fault atau reverse/backfeed external fault.
 - Mode reverse/backfeed: signed distance dipertahankan; jarak negatif atau > line length tidak langsung salah.
-- Takagi fallback: untuk ground fault (SLG) bila prefault tersedia, memakai metode Takagi penuh `d = Im(U·ΔI*)/Im(Z₁·I·ΔI*)` yang mengeliminasi Rf secara eksak; menggantikan recommended distance jika konvensional out-of-range dan hasil Takagi masuk range. Referensi: Saha (2010) Eq. 6.8.
+- Takagi fallback: untuk ground fault (SLG) bila prefault tersedia, mengeliminasi Rf secara eksak; menggantikan recommended distance jika konvensional out-of-range dan hasil Takagi masuk range. Rumus → FORMULAS.md Sec. 2.4 (Saha 2010 Eq. 6.8).
 - Status: `VALID`, `CHECK`, `UNCERTAIN`.
 - Warning: jarak negatif, jarak melebihi line, magnitude vs reactance berbeda signifikan, Rf tinggi, sudut Zapp menyimpang, indikasi load-flow/backfeed.
 - Hasil disimpan: `single_ended_result`, `remote_single_ended_result`, dataframe detail masing-masing.
@@ -241,23 +242,22 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 ## Double-End Fault Locator
 
 - Remote setup berada di tab `Remote End`, bukan di halaman DE.
-- Input: local positive sequence phasor `V1/I1`, remote `V1/I1`, line parameter efektif, remote record adaptation, scenario gangguan.
-- Sumber panjang line: Line Parameter atau Tower Schedule. Jika Tower Schedule: `Z1_total = Z1_per_km * length_km`, `Z0_total = Z0_per_km * length_km`.
-- Positive-sequence equation:
-  - `Vlocal(x) = V1L - I1L * Z1_per_km * x`
-  - `Vremote(x) = V1R - I1R * Z1_per_km * (L - x)`
-  - fault point: `x = (V1L - V1R + I1R * Z1_per_km * L) / (Z1_per_km * (I1L + I1R))`
-  - Jika remote current direction `opposite_to_line`, `I1R` diinversi.
+- Input: local positive sequence phasor `V1/I1`, remote `V1/I1`, `effective_line_param`, remote record adaptation, scenario gangguan.
+- **Sumber panjang line tidak dipilih di halaman DE** — selalu memakai `effective_line_param` dari tab Line. Halaman DE hanya menampilkan caption panjang line aktif + arahan ke tab Line.
+- Metode: positive-sequence closed-form (local x=0, remote x=L). Jika remote current direction `opposite_to_line`, `I1R` diinversi. **Persamaan lengkap → [`FORMULAS.md`](FORMULAS.md) Sec. 3.1.**
 - Output utama: distance complex, distance km dari local, distance percent, distance dari remote, voltage fault dari local/remote, mismatch tegangan fault, quality score.
-- Quality score: penalti distance negatif/> line length/imaginary, penalti mismatch tegangan, dikunci 0–10.
+- Quality score: penalti distance negatif/> line length/imaginary, penalti mismatch tegangan, dikunci 0–10. Rincian penalti → FORMULAS.md Sec. 3.3.
 - Remote adaptation: `auto_adapt_record`, `auto_current_direction_only`, manual `into_line`, manual `opposite_to_line`.
 - Candidate ranking: distance keluar line, imaginary distance, mismatch ratio, quality score, penalti angle shift, penalti polaritas/arah tertentu.
 - Visual sync: **referensi default `fault_phase_voltage` (jika tersedia, fallback `fault_cursor`)**, **metode default raw waveform correlation**, opsi sinkronisasi fault cursor/time/visual. Fault inception untuk alignment, DFT cursor untuk kalkulasi phasor.
 - Grafik sync waveform: default menampilkan **tegangan dan arus fasa terganggu** sekaligus. Tegangan di subplot atas (Y: Tegangan Primary), arus di subplot bawah (Y: Arus Primary), X axis shared. `build_synchronized_fault_plot` mendukung `current_channels` parameter untuk layout dual subplot.
 - **Visual Sync Quality** ditampilkan setelah grafik sync: 5 metrik (DE Remote DFT Time, DE Remote DFT Index, Waveform Sync Score, Visual Sync Score, Sync Status). Visual Sync Score = Pearson correlation instantaneous waveform tegangan fasa terganggu di 2 siklus sekitar DFT cursor setelah alignment. Threshold: ≥0.85 Sinkron, 0.50–0.85 Cukup Sinkron, <0.50 Kurang Sinkron, <0 Terbalik/Tidak Sinkron.
-- Optional TWS/time-based: `distance_from_local = (L + v * delta_t) / 2`, warning bila delta time/distance tidak realistis.
+- Optional TWS/time-based: estimasi jarak dari selisih waktu kedatangan gelombang, warning bila delta time/distance tidak realistis (rumus → FORMULAS.md jika diimplementasi penuh).
 - Scenario: internal line fault atau reverse/backfeed/external fault. SOTF/parallel/adjacent line diperlakukan sebagai konteks reverse/backfeed, bukan label wajib.
-- Perbandingan SE pada halaman DE memakai line parameter efektif yang sama; jika DE memakai Tower Schedule, SE comparison juga memakai panjang Tower Schedule.
+- Perbandingan SE pada halaman DE memakai `effective_line_param` yang sama.
+- **Status Diagnostik DE** ditampilkan dengan label bahasa Indonesia + emoji (bukan kode mentah seperti `NORMAL_INTERNAL_LINE_FAULT`); catatan kondisi di expander "Detail kondisi yang terdeteksi"; rekomendasi sebagai `st.info`.
+- **Warning DE** ditulis dengan pola apa-yang-terjadi → mengapa → tindakan (disimpan di sumber `two_ended.py` agar konsisten di DE dan Summary).
+- **Line Position Visualization** (Grafik SE dan DE, juga di Summary): label annotation **draggable** (Plotly `config editable`, tanpa teks "Click to enter"); label & hover menampilkan jarak dari **kedua GI** (lokal + remote); semua marker **filled** (distinksi lokal/remote lewat warna). **Tidak ada auto-placement label** — overlap diatasi dengan drag manual.
 - Hasil disimpan: `two_ended_result`, `two_ended_quality`, `two_ended_reverse_result`, `two_ended_reverse_quality`, `two_ended_comparison_df`, local/remote SE comparison result.
 
 ---
@@ -267,12 +267,14 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Sub-view local dan remote.
 - Membaca distance relay setting dari sheet `distance_settings`.
 - Filter relay setting: GI/Substation, Bay, search text.
+- **Selector "Pilih setting relay distance" default placeholder** (`— Pilih setting relay distance —`) — tidak auto-pick baris pertama (rawan salah GI).
+- **Sinkronisasi dari filter sidebar (authoritative):** bila filter GI/Bay/Line di sidebar aktif, GI/Substation + Bay + baris relay di halaman locus **otomatis terpilih** mengikuti sidebar (set tiap run sebelum widget). Pencocokan baris relay memakai kolom LINE dengan normalisasi numerik (`"1.0"`=`"1"`). Bila sidebar placeholder, halaman locus pakai default sendiri + bisa dipilih manual.
 - Zone setting base: **default primary ohm**. Optional: relay secondary ohm, dikonversi ke primary via rasio CT/VT dari Signal Assignment.
 - Parameter zona: `Z1/Z2/Z3 Res Ph`, `Z1/Z2/Z3 Res Gnd`, kN dan kN angle jika tersedia.
 - Zona quadrilateral: X reach dan R reach/resistive reach, phase/gnd reach dipilih sesuai loop fault.
 - Trajectory: apparent impedance dari waveform sepanjang window, titik DFT cursor ditandai, Z Line Total sebagai referensi.
 - Plot focus: default fokus ke relay zones; dapat menampilkan trajectory penuh bila user pilih.
-- Summary menampilkan R-X Locus local dan remote sebagai section terpisah agar print tidak menumpuk.
+- Summary menampilkan R-X Locus local dan remote sebagai section terpisah agar print tidak menumpuk. Cache figure Summary (`_summary_rx_cache`/`_rx_key`) menyertakan key pilihan zona (setting row, substation, bay, show_zone, zone_setting_base) agar ikut update saat relay setting dipilih di halaman Locus.
 
 ---
 
@@ -311,8 +313,10 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 
 - Tampil setelah COMTRADE lokal berhasil dibaca.
 - Jika kalkulasi belum lengkap, tampilkan `Pending`, bukan halaman blank.
-- Konten: metadata local/remote, status Signal Assignment/Fault Cursor/Phasor/Fault Type/Line Parameter/SE/DE, key results (fault type, SE distance, DE distance, DE quality), IE source local/remote, perbandingan prefault/fault, waveform fokus opsional, estimasi penyebab gangguan, grafik SE/DE, Tower Map Fault Location, cuaca terkini + forecast, R-X Locus local/remote, warning kualitas DE/HR.
-- Grafik SE/DE: memakai hasil paling update dari session; scoring SE via status `VALID/CHECK/UNCERTAIN` + warning count; scoring DE via `quality_score`; line length mengikuti hasil DE jika memakai Tower Schedule.
+- Konten: metadata local/remote, status Signal Assignment/Fault Cursor/Phasor/Fault Type/Line Parameter/SE/DE, Key Results, Status Diagnostik DE, IE source local/remote, perbandingan prefault/fault, waveform fokus opsional, estimasi penyebab gangguan, grafik SE/DE, Tower Map Fault Location, cuaca terkini + forecast, R-X Locus local/remote, warning kualitas DE/HR.
+- **Key Results** disusun 2 baris: (1) Fault Type + Prediksi Penyebab (ringkas); (2) SE dari GI lokal, SE dari GI remote (jarak asli dari masing-masing GI), DE dari GI lokal, DE dari GI remote — semua dengan persen. DE Quality dan Status DE tidak lagi di Key Results (ada di Status Diagnostik DE).
+- **Estimasi Penyebab Gangguan otomatis** (tanpa selectbox manual): `estimate_summary_disturbance_cause` menentukan penyebab dari fault type + indikasi HR, menampilkan tabel dasar penentuan (Parameter|Nilai: fault type, Rf, confidence, arus/tegangan fasa terganggu fault-vs-prefault, IE), penjelasan, catatan, dan referensi literatur. Singkatan diberi kepanjangan (SLG, CB, SOE, SOTF, dll).
+- Grafik SE/DE: memakai hasil paling update dari session; scoring SE via status `VALID/CHECK/UNCERTAIN` + warning count; scoring DE via `quality_score`; line length mengikuti `effective_line_param`. Label draggable + both-GI + marker filled (lihat Double-End).
 - Tower Map Summary: default DE jika tersedia, fallback SE; fokus ke dua tower pengapit; Map Settings default tertutup; tabel -5/+5 tower default terbuka saat focus fault.
 - Weather Summary: tampil setelah Tower Map punya data tower dan sumber fault.
 
@@ -331,10 +335,10 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 
 ### Runtime Credentials
 
-- Format: file `credentials.toml` atau `credentials.json` diupload ke Setup DB.
+- Format: file `credentials.toml` atau `credentials.json`. **Upload dilakukan di panel `Credentials` sidebar** (bukan lagi di Setup DB). Setup DB hanya menyisakan indikator credentials aktif, tombol Download Template, dan Clear (tanpa expander show/hide, tanpa uploader).
 - Hanya dibaca ke memory/session; tidak ditulis ke disk, tidak dicetak, tidak diekspor.
 - Dapat mengisi otomatis: Database Spreadsheet URL, Line/Cable/Distance sheet names, Tower Schedule URL + sheet, OpenWeather API key, Google service account opsional.
-- Tombol `Clear runtime credentials from session` tersedia.
+- Tombol `Clear Runtime Credentials from Session` (di Setup DB) tersedia.
 - `.gitignore` harus mengecualikan `.streamlit/secrets.toml`, `credentials*.toml`, `credentials*.json`.
 
 ### Prioritas Konfigurasi
@@ -379,7 +383,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 `remote_assigned_df`, `remote_transformer_data`, `remote_fault_window`, `remote_phasors`, `remote_prefault_phasors`, `remote_fault_type_result`
 
 **Line:**
-`line_param`
+`line_param`, `effective_line_param` (override length+Z_total dari sumber yang dipilih; dibaca oleh SE/DE/HR), `line_length_source` ("line_parameter" atau "tower_schedule")
 
 **Tower:**
 `tower_schedule_df`, `tower_schedule_filtered_df`, `tower_schedule_selected_length_km`, `tower_schedule_selected_length_source`, `tower_schedule_selected_segment`, `tower_schedule_selected_ultg`

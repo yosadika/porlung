@@ -88,3 +88,18 @@ def invert_current_phasors(phasors):
         }
 
     return inverted
+
+
+def cached_style_format(df: pd.DataFrame, fmt: dict, site_key: str, **kwargs):
+    """Cache hasil .style.format() di session_state.
+
+    Hanya efektif untuk DataFrame yang stabil antar rerun (dibaca dari session_state,
+    bukan dibangun ulang setiap rerun). Cache key berbasis id(df) — berubah hanya
+    saat DataFrame diganti setelah kalkulasi baru.
+    """
+    _cache = st.session_state.setdefault("_styler_cache", {})
+    _k = id(df)
+    if _cache.get(site_key) != _k:
+        _cache[site_key + "_v"] = df.style.format(fmt, **kwargs)
+        _cache[site_key] = _k
+    return _cache[site_key + "_v"]

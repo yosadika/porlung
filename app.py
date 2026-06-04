@@ -764,18 +764,17 @@ if "tower_schedule_df" not in st.session_state:
     if _sb_ia(_sb_seg):
         st.session_state["tower_schedule_pre_segment"] = _sb_seg
 
-# R-X Locus: sync substation dan bay saat sidebar berubah
-_sb_locus_key = f"{_sb_gi_l}|{_sb_bay_l}|{_sb_gi_r}|{_sb_bay_r}"
-if _sb_locus_key != st.session_state.get("_sb_locus_sync_key", ""):
-    st.session_state["_sb_locus_sync_key"] = _sb_locus_key
-    if _sb_ia(_sb_gi_l):
-        st.session_state["rx_locus_substation_local"] = _sb_gi_l
-    if _sb_ia(_sb_bay_l):
-        st.session_state["rx_locus_bay_local"] = _sb_bay_l
-    if _sb_ia(_sb_gi_r):
-        st.session_state["rx_locus_substation_remote"] = _sb_gi_r
-    if _sb_ia(_sb_bay_r):
-        st.session_state["rx_locus_bay_remote"] = _sb_bay_r
+# R-X Locus: sidebar adalah sumber kebenaran saat filter aktif.
+# Set tiap run (sebelum widget locus dirender) agar pilihan selalu mengikuti sidebar.
+# Tidak menimpa saat sidebar placeholder, sehingga locus tetap bisa dipakai manual.
+if _sb_ia(_sb_gi_l):
+    st.session_state["rx_locus_substation_local"] = _sb_gi_l
+if _sb_ia(_sb_bay_l):
+    st.session_state["rx_locus_bay_local"] = _sb_bay_l
+if _sb_ia(_sb_gi_r):
+    st.session_state["rx_locus_substation_remote"] = _sb_gi_r
+if _sb_ia(_sb_bay_r):
+    st.session_state["rx_locus_bay_remote"] = _sb_bay_r
 
 # Line Parameter: auto-select Database Excel Line Data saat sidebar GI/Segment aktif
 _sb_li_key = f"{_sb_gi_l}|{_sb_seg}"
@@ -1509,7 +1508,12 @@ def build_locus_zone_settings_from_session(end_side: str, label: str, loop_name:
     row_labels = build_locus_setting_row_labels(filtered_settings_df, distance_columns)
     selected_label = st.session_state.get(f"rx_locus_setting_row_{end_side}")
     if selected_label not in row_labels:
-        selected_label = row_labels[0]
+        return [], {
+            "zone_count": 0,
+            "zone_setting_base": zone_setting_base,
+            "selected_substation": selected_substation,
+            "selected_bay": selected_bay,
+        }, None
     selected_row = filtered_settings_df.iloc[row_labels.index(selected_label)]
     zones = extract_locus_zone_settings(selected_row, distance_columns, loop_name)
     if zone_setting_base == "secondary":
@@ -1710,84 +1714,53 @@ with tab0:
             "atau masukkan URL/API key secara manual untuk memuat data otomatis."
         )
 
-    with st.expander("Runtime credentials upload", expanded=False):
-        st.caption(
-            "Opsional untuk repo public: upload `credentials.toml` atau `credentials.json` agar URL spreadsheet "
-            "dan API key terisi otomatis tanpa hardcode di GitHub. File hanya dibaca ke session, tidak disimpan ke disk/case ZIP."
-        )
-        template = textwrap.dedent(
-            """
-            [spreadsheet]
-            database_url = "https://docs.google.com/spreadsheets/d/..."
-            database_line_sheet = "line_impedance"
-            database_cable_sheet = "cable_impedance"
-            database_distance_sheet = "distance_settings"
-            tower_schedule_url = "https://docs.google.com/spreadsheets/d/..."
-            tower_schedule_sheet = "tower_schedule"
+    st.markdown("#### Runtime Credentials")
+    _cred_loaded_name = st.session_state.get("runtime_credentials_loaded_name")
+    if _cred_loaded_name:
+        st.success(f"Credentials aktif: {_cred_loaded_name}")
+    st.caption(
+        "Upload `credentials.toml` / `credentials.json` melalui panel **Credentials** di sidebar agar URL spreadsheet "
+        "dan API key terisi otomatis. File hanya dibaca ke session, tidak disimpan ke disk/case ZIP."
+    )
+    template = textwrap.dedent(
+        """
+        [spreadsheet]
+        database_url = "https://docs.google.com/spreadsheets/d/..."
+        database_line_sheet = "line_impedance"
+        database_cable_sheet = "cable_impedance"
+        database_distance_sheet = "distance_settings"
+        tower_schedule_url = "https://docs.google.com/spreadsheets/d/..."
+        tower_schedule_sheet = "tower_schedule"
 
-            [openweather]
-            api_key = "isi_api_key_openweather"
+        [openweather]
+        api_key = "isi_api_key_openweather"
 
-            [case_storage]
-            drive_folder_url = "https://drive.google.com/drive/folders/..."
+        [case_storage]
+        drive_folder_url = "https://drive.google.com/drive/folders/..."
 
-            # Opsional untuk Google Drive/service account.
-            # [google_service_account]
-            # type = "service_account"
-            # project_id = "..."
-            # private_key_id = "..."
-            # private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
-            # client_email = "..."
-            # client_id = "..."
-            # token_uri = "https://oauth2.googleapis.com/token"
-            """
-        ).strip()
+        # Opsional untuk Google Drive/service account.
+        # [google_service_account]
+        # type = "service_account"
+        # project_id = "..."
+        # private_key_id = "..."
+        # private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
+        # client_email = "..."
+        # client_id = "..."
+        # token_uri = "https://oauth2.googleapis.com/token"
+        """
+    ).strip()
+    _col_cred1, _col_cred2 = st.columns(2)
+    with _col_cred1:
         st.download_button(
-            "Download template credentials.toml",
+            "Download Template credentials.toml",
             data=template,
             file_name="credentials.template.toml",
             mime="text/plain",
             key="download_runtime_credentials_template",
+            use_container_width=True,
         )
-        uploaded_credentials = st.file_uploader(
-            "Upload credentials file",
-            type=["toml", "json"],
-            key="runtime_credentials_upload",
-            help="Gunakan file milik user. Jangan upload file credentials ke GitHub.",
-        )
-        if uploaded_credentials is not None:
-            fingerprint = hashlib.sha256(uploaded_credentials.getvalue()).hexdigest()
-            if st.session_state.get("runtime_credentials_fingerprint") != fingerprint:
-                payload, error = parse_runtime_credentials_upload(uploaded_credentials)
-                if error:
-                    st.error(error)
-                else:
-                    st.session_state["runtime_credentials"] = payload
-                    st.session_state["runtime_credentials_loaded_name"] = uploaded_credentials.name
-                    st.session_state["runtime_credentials_fingerprint"] = fingerprint
-                    applied = apply_runtime_credentials(payload)
-                    if applied:
-                        st.success("Credentials diterapkan: " + ", ".join(applied))
-                    else:
-                        st.warning("Credentials terbaca, tetapi tidak ada field yang cocok untuk diterapkan.")
-            else:
-                payload = st.session_state.get("runtime_credentials")
-                if not isinstance(payload, dict):
-                    payload, error = parse_runtime_credentials_upload(uploaded_credentials)
-                    if error:
-                        st.error(error)
-                        payload = None
-                    elif payload is not None:
-                        st.session_state["runtime_credentials"] = payload
-                applied = apply_runtime_credentials(payload) if isinstance(payload, dict) else []
-                if applied:
-                    st.info(
-                        f"Credentials aktif: {st.session_state.get('runtime_credentials_loaded_name', uploaded_credentials.name)}. "
-                        "Nilai konfigurasi diterapkan ulang ke field."
-                    )
-                else:
-                    st.info(f"Credentials aktif: {st.session_state.get('runtime_credentials_loaded_name', uploaded_credentials.name)}")
-        if st.button("Clear runtime credentials from session", key="clear_runtime_credentials"):
+    with _col_cred2:
+        if st.button("Clear Runtime Credentials from Session", key="clear_runtime_credentials", use_container_width=True):
             for key in [
                 "runtime_credentials",
                 "runtime_credentials_loaded_name",
@@ -2460,40 +2433,81 @@ with summary_container:
     st.dataframe(pd.DataFrame(status_rows), use_container_width=True)
 
     st.markdown("### Key Results")
-    key_col1, key_col2, key_col3, key_col4 = st.columns(4)
     fault_type_summary = st.session_state.get("fault_type_result", {})
     remote_fault_type_summary = st.session_state.get("remote_fault_type_result", {})
     single_summary = st.session_state.get("single_ended_result")
+    remote_single_summary = st.session_state.get("remote_single_ended_result")
     two_summary = st.session_state.get("two_ended_result")
     two_quality_summary = st.session_state.get("two_ended_quality", {})
+    _local_gi  = st.session_state.get("two_ended_local_gi_label", "GI Lokal")
+    _remote_gi = st.session_state.get("two_ended_remote_gi_label", "GI Remote")
+    _line_len  = float((st.session_state.get("effective_line_param") or st.session_state.get("line_param") or {}).get("length_km") or 0.0)
 
-    key_col1.metric("Fault Type", fault_type_summary.get("fault_type", "-"))
-    key_col2.metric(
-        "Single-End",
-        f'{single_summary["recommended_distance_km"]:.3f} km' if single_summary else "-",
+    # Baris 1 — Fault Type dan Prediksi Penyebab (ringkas)
+    _estimated_cause, _ = estimate_summary_disturbance_cause(
+        fault_type_summary,
+        st.session_state.get("high_resistance_result"),
     )
-    key_col3.metric(
-        "Double-End",
-        f'{two_summary.get("distance_from_original_local_km", two_summary.get("distance_km", 0.0)):.3f} km' if two_summary else "-",
+    # Ambil bagian sebelum tanda kurung untuk tampilan singkat
+    _cause_short = (_estimated_cause or "-").split("(")[0].strip()
+
+    kr1, kr2 = st.columns([1, 3])
+    kr1.metric("Fault Type", fault_type_summary.get("fault_type", "-"))
+    kr2.metric("Prediksi Penyebab", _cause_short)
+
+    # Baris 2 — SE lokal, SE remote, DE dari lokal, DE dari remote
+    _se_local_km  = f'{single_summary["recommended_distance_km"]:.3f} km' if single_summary else "-"
+    _se_local_pct = f'({single_summary["recommended_distance_km"] / _line_len * 100:.1f}%)' if single_summary and _line_len > 0 else ""
+
+    # Remote SE sudah dikonversi ke jarak dari lokal di build_remote_single_signed_position;
+    # untuk Key Results tampilkan jarak asli dari GI remote (recommended_distance_km remote SE)
+    _se_remote_km  = f'{remote_single_summary["recommended_distance_km"]:.3f} km' if remote_single_summary else "-"
+    _se_remote_pct = f'({remote_single_summary["recommended_distance_km"] / _line_len * 100:.1f}%)' if remote_single_summary and _line_len > 0 else ""
+
+    _de_local_km  = two_summary.get("distance_from_original_local_km", two_summary.get("distance_km", 0.0)) if two_summary else None
+    _de_remote_km = (_line_len - _de_local_km) if (_de_local_km is not None and _line_len > 0) else None
+
+    kr5, kr6, kr7, kr8 = st.columns(4)
+    kr5.metric(f"SE dari {_local_gi}", f"{_se_local_km} {_se_local_pct}".strip() if single_summary else "-")
+    kr6.metric(f"SE dari {_remote_gi}", f"{_se_remote_km} {_se_remote_pct}".strip() if remote_single_summary else "-")
+    kr7.metric(
+        f"DE dari {_local_gi}",
+        f"{_de_local_km:.3f} km ({_de_local_km / _line_len * 100:.1f}%)" if _de_local_km is not None and _line_len > 0 else ("-" if two_summary is None else f"{_de_local_km:.3f} km"),
     )
-    key_col4.metric(
-        "DE Quality",
-        f'{two_quality_summary.get("quality_score", "-")}/10'
-        if two_quality_summary
-        else "-",
+    kr8.metric(
+        f"DE dari {_remote_gi}",
+        f"{_de_remote_km:.3f} km ({_de_remote_km / _line_len * 100:.1f}%)" if _de_remote_km is not None else "-",
     )
 
     summary_operating_status = st.session_state.get("two_ended_operating_status")
     if summary_operating_status:
         st.markdown("### Status Diagnostik DE")
-        status_text = ", ".join(summary_operating_status.get("statuses", []))
-        if summary_operating_status.get("can_use_de_distance"):
-            st.success(f"Status: {status_text}")
-        else:
-            st.warning(f"Status: {status_text}")
-        for note in summary_operating_status.get("notes", []):
-            st.info(note)
-        st.caption(summary_operating_status.get("recommendation", ""))
+        _STATUS_LABEL = {
+            "NORMAL_INTERNAL_LINE_FAULT":             "✅  Gangguan internal saluran — hasil DE dapat digunakan",
+            "BACKFEED_OR_REVERSE_FAULT_SUSPECTED":    "⚠️  Backfeed / reverse fault diduga — gangguan mungkin di luar saluran ini",
+            "EXTERNAL_TO_IMPORTED_LINE_SUSPECTED":    "⚠️  Gangguan diduga berasal dari saluran lain yang diimpor",
+            "DE_NOT_APPLICABLE_FOR_IMPORTED_LINE":    "🚫  Hasil DE tidak berlaku — jarak di luar saluran atau rekaman tidak sesuai",
+            "REMOTE_REVERSE_FAULT":                   "⚠️  Arus remote menunjukkan arah reverse — relay remote melihat fault di belakang terminal",
+        }
+        _can_use = summary_operating_status.get("can_use_de_distance", True)
+        _statuses = summary_operating_status.get("statuses", [])
+        _notes    = summary_operating_status.get("notes", [])
+        _rec      = summary_operating_status.get("recommendation", "")
+
+        for _s in _statuses:
+            _label = _STATUS_LABEL.get(_s, _s)
+            if _can_use:
+                st.success(_label)
+            else:
+                st.warning(_label)
+
+        if _notes:
+            with st.expander("Detail kondisi yang terdeteksi", expanded=False):
+                for _note in _notes:
+                    st.markdown(f"- {_note}")
+
+        if _rec:
+            st.info(f"**Rekomendasi:** {_rec}")
     st.markdown("### Perbandingan Pre-fault dan Fault")
     local_comparison_df = build_prefault_fault_comparison_dataframe(
         st.session_state.get("phasors"),
@@ -2617,29 +2631,47 @@ with summary_container:
                 st.info(f"Channel {channel_name} belum tersedia untuk grafik {waveform_title}.")
 
     st.markdown("### Estimasi Penyebab Gangguan")
-    estimated_cause, estimated_cause_note = estimate_summary_disturbance_cause(
+    estimated_cause, estimated_cause_detail = estimate_summary_disturbance_cause(
         fault_type_summary,
         st.session_state.get("high_resistance_result"),
+        phasors=st.session_state.get("phasors"),
+        prefault_phasors=st.session_state.get("prefault_phasors"),
+        single_result=st.session_state.get("single_ended_result"),
+        two_result=st.session_state.get("two_ended_result"),
+        two_quality=st.session_state.get("two_ended_quality"),
+        line_param=st.session_state.get("effective_line_param") or st.session_state.get("line_param"),
     )
-    cause_options = [
-        "Auto estimate",
-        "Petir",
-        "Pohon",
-        "Benda asing",
-        "Power swing",
-        "Belum diketahui",
-    ]
-    cause_choice = st.selectbox(
-        "Penyebab gangguan untuk report",
-        cause_options,
-        key="summary_disturbance_cause_choice",
-    )
-    displayed_cause = estimated_cause if cause_choice == "Auto estimate" else cause_choice
-    st.metric("Penyebab Gangguan", displayed_cause)
-    st.caption(estimated_cause_note)
+    st.metric("Penyebab Gangguan", estimated_cause)
+
+    _basis = estimated_cause_detail.get("basis", [])
+    _explanation = estimated_cause_detail.get("explanation", "")
+    _references = estimated_cause_detail.get("references", "")
+    _note = estimated_cause_detail.get("note", "")
+
+    if _basis:
+        st.markdown("**Dasar penentuan:**")
+        st.dataframe(
+            pd.DataFrame(_basis),
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Parameter": st.column_config.TextColumn("Parameter", width="medium"),
+                "Nilai": st.column_config.TextColumn("Nilai", width="large"),
+            },
+        )
+
+    if _explanation:
+        st.markdown(_explanation)
+
+    if _note:
+        st.info(_note)
+
+    if _references:
+        st.caption(f"*Referensi: {_references}*")
 
     st.markdown("### Grafik SE dan DE")
     _sloc_key = (
+        "v3",  # bump saat label/format figure berubah
         (st.session_state.get("two_ended_result") or {}).get("distance_km"),
         (st.session_state.get("two_ended_quality") or {}).get("quality_score"),
         (st.session_state.get("single_ended_result") or {}).get("recommended_distance_km"),
@@ -2656,6 +2688,21 @@ with summary_container:
             summary_location_fig,
             use_container_width=True,
             key="summary_two_ended_line_position_fig",
+            config={
+                "editable": True,
+                "edits": {
+                    "annotationPosition": True,
+                    "annotationTail": True,
+                    "annotationText": False,
+                    "axisTitleText": False,
+                    "titleText": False,
+                    "legendText": False,
+                    "legendPosition": False,
+                    "shapePosition": False,
+                    "colorbarPosition": False,
+                    "colorbarTitleText": False,
+                },
+            },
         )
     else:
         st.info(
@@ -2707,6 +2754,12 @@ with summary_container:
             st.session_state.get(f"rx_locus_density_{end_suffix}", "1/4 cycle"),
             int((st.session_state.get(_fw_key) or {}).get("dft_index", 0)),
             float((st.session_state.get("line_param") or {}).get("length_km", 0)),
+            # Pilihan zona proteksi — agar Summary ikut update saat relay setting dipilih di halaman Locus
+            bool(st.session_state.get(f"rx_locus_show_zone_{end_suffix}", True)),
+            st.session_state.get(f"rx_locus_substation_{end_suffix}", ""),
+            st.session_state.get(f"rx_locus_bay_{end_suffix}", ""),
+            st.session_state.get(f"rx_locus_setting_row_{end_suffix}", ""),
+            st.session_state.get(f"rx_locus_zone_setting_base_{end_suffix}", "primary"),
         )
         _rx_cache = st.session_state.get("_summary_rx_cache", {})
         if _rx_cache.get(end_suffix + "_k") == _rx_key:
@@ -3308,7 +3361,7 @@ def resolve_end_analysis_context(end_side: str, feature_label: str):
         st.warning("Silakan lakukan Line Parameter terlebih dahulu.")
         return None
 
-    line_param = st.session_state["line_param"]
+    line_param = st.session_state.get("effective_line_param") or st.session_state["line_param"]
     local_gi_label, remote_gi_label = infer_gi_names_from_line_name(
         line_param.get("line_name", "")
     )
@@ -3477,9 +3530,11 @@ def render_single_ended_analysis(end_side: str):
     fault_type_result = ctx["fault_type_result"]
 
     st.markdown("### Input Perhitungan")
-    line_param = select_effective_line_param_for_calculation(
-        line_param,
-        f"single_ended_{suffix}",
+    line_param = st.session_state.get("effective_line_param") or line_param
+    st.caption(
+        f"Panjang line yang digunakan: **{line_param['length_km']:.6f} km** "
+        f"(sumber: {line_param.get('length_source', 'Line Parameter')}). "
+        "Untuk mengubah sumber panjang line, gunakan selector di tab **Line**."
     )
     col_se1, col_se2, col_se3, col_se4 = st.columns(4)
     col_se1.metric("End", ctx["label"])
@@ -3668,20 +3723,24 @@ def render_simple_rx_locus(end_side: str):
 
             substation_options = sorted_nonempty_values(distance_settings_df, substation_col)
             substation_labels = ["Semua GI/Substation"] + substation_options
-            default_substation = label.replace("GI ", "").strip().upper()
-            default_index = 0
-            for idx, option in enumerate(substation_labels):
-                if default_substation and option.upper().replace(" ", "") == default_substation.replace(" ", ""):
-                    default_index = idx
-                    break
+            # Seed default hanya jika belum di-set (sidebar sync menulis key ini lebih dulu bila aktif).
+            # Pakai key= saja (tanpa index=) agar tidak konflik dengan nilai dari session_state.
+            _sub_key = f"rx_locus_substation_{end_side}"
+            if st.session_state.get(_sub_key) not in substation_labels:
+                _default_substation = label.replace("GI ", "").strip().upper()
+                _sub_seed = "Semua GI/Substation"
+                for option in substation_labels:
+                    if _default_substation and option.upper().replace(" ", "") == _default_substation.replace(" ", ""):
+                        _sub_seed = option
+                        break
+                st.session_state[_sub_key] = _sub_seed
 
             col_set1, col_set2, col_set3 = st.columns([1.4, 1.6, 1.2])
             with col_set1:
                 selected_substation = st.selectbox(
                     "GI / Substation",
                     substation_labels,
-                    index=default_index,
-                    key=f"rx_locus_substation_{end_side}",
+                    key=_sub_key,
                 )
 
             filtered_settings_df = distance_settings_df
@@ -3691,8 +3750,12 @@ def render_simple_rx_locus(end_side: str):
                 ].reset_index(drop=True)
 
             bay_labels = ["Semua Bay"] + sorted_nonempty_values(filtered_settings_df, bay_col)
+            # Guard: jika nilai bay tersimpan tidak ada di opsi (mis. setelah ganti substation), reset.
+            _bay_key = f"rx_locus_bay_{end_side}"
+            if st.session_state.get(_bay_key) not in bay_labels:
+                st.session_state[_bay_key] = "Semua Bay"
             with col_set2:
-                selected_bay = st.selectbox("Bay", bay_labels, key=f"rx_locus_bay_{end_side}")
+                selected_bay = st.selectbox("Bay", bay_labels, key=_bay_key)
             if selected_bay != "Semua Bay" and bay_col:
                 filtered_settings_df = filtered_settings_df[
                     filtered_settings_df[bay_col].astype(str).str.strip() == selected_bay
@@ -3711,31 +3774,64 @@ def render_simple_rx_locus(end_side: str):
                 st.warning("Tidak ada baris distance_settings yang cocok dengan filter.")
             else:
                 row_labels = build_locus_setting_row_labels(filtered_settings_df, distance_columns)
+                _PLACEHOLDER = "— Pilih setting relay distance —"
+
+                # Auto-select baris relay mengikuti filter Line di sidebar (jika aktif).
+                # Hanya berlaku saat sidebar line filter berubah, agar tidak menimpa pilihan manual user.
+                def _nv_line(v):
+                    """Normalisasi nomor line agar '1.0' (spreadsheet) cocok dengan '1' (sidebar)."""
+                    try:
+                        f = float(v)
+                        if f == int(f):
+                            return str(int(f))
+                    except (ValueError, TypeError):
+                        pass
+                    return str(v).strip().upper()
+
+                _sb_line = st.session_state.get(f"sidebar_filter_line_{end_side}", "")
+                _line_col = distance_columns.get("line")
+                if _sb_ia(_sb_line) and _line_col and _line_col in filtered_settings_df.columns:
+                    _target_line = _nv_line(_sb_line)
+                    _auto_label = None
+                    for _i, _lbl in enumerate(row_labels):
+                        if _nv_line(filtered_settings_df.iloc[_i][_line_col]) == _target_line:
+                            _auto_label = _lbl
+                            break
+                    _setting_sync_key = f"{end_side}|{selected_substation}|{selected_bay}|{_sb_line}"
+                    if _auto_label and _setting_sync_key != st.session_state.get(f"_rx_setting_sync_{end_side}", ""):
+                        st.session_state[f"_rx_setting_sync_{end_side}"] = _setting_sync_key
+                        st.session_state[f"rx_locus_setting_row_{end_side}"] = _auto_label
+
                 selected_label = st.selectbox(
                     "Pilih setting relay distance",
-                    row_labels,
+                    [_PLACEHOLDER] + row_labels,
                     key=f"rx_locus_setting_row_{end_side}",
                 )
-                selected_row = filtered_settings_df.iloc[row_labels.index(selected_label)]
-                locus_zone_settings = extract_locus_zone_settings(selected_row, distance_columns, loop_name)
-                if zone_setting_base == "secondary":
-                    locus_zone_settings = scale_locus_zone_settings(
-                        locus_zone_settings,
-                        1.0 / secondary_scale if secondary_scale else 1.0,
-                    )
-
-                if locus_zone_settings:
-                    st.dataframe(
-                        pd.DataFrame(locus_zone_settings).style.format(
-                            {
-                                "x_reach_ohm": "{:.3f}",
-                                "r_reach_ohm": "{:.3f}",
-                            }
-                        ),
-                        use_container_width=True,
-                    )
+                if selected_label == _PLACEHOLDER:
+                    st.info("Pilih setting relay distance untuk menampilkan zona proteksi.")
+                    locus_zone_settings = None
+                    selected_row = None
                 else:
-                    st.warning("Baris setting terpilih belum memiliki X reach dan R reach yang cukup untuk Z1/Z2/Z3.")
+                    selected_row = filtered_settings_df.iloc[row_labels.index(selected_label)]
+                    locus_zone_settings = extract_locus_zone_settings(selected_row, distance_columns, loop_name)
+                    if zone_setting_base == "secondary":
+                        locus_zone_settings = scale_locus_zone_settings(
+                            locus_zone_settings,
+                            1.0 / secondary_scale if secondary_scale else 1.0,
+                        )
+
+                    if locus_zone_settings:
+                        st.dataframe(
+                            pd.DataFrame(locus_zone_settings).style.format(
+                                {
+                                    "x_reach_ohm": "{:.3f}",
+                                    "r_reach_ohm": "{:.3f}",
+                                }
+                            ),
+                            use_container_width=True,
+                        )
+                    else:
+                        st.warning("Baris setting terpilih belum memiliki X reach dan R reach yang cukup untuk Z1/Z2/Z3.")
         except Exception as e:
             st.warning("Setting distance relay belum dapat dibaca dari spreadsheet.")
             st.caption("Pastikan sheet `distance_settings` tersedia pada Database Spreadsheet URL di tab Setup DB.")
