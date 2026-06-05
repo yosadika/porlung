@@ -31,6 +31,11 @@ service-account*.json
 .streamlit/secrets.toml.*
 credentials*.toml
 credentials*.json
+# Folder credentials & SEMUA isinya — JANGAN PERNAH commit
+credentials/
+# Tangkap nama dengan prefix apa pun (mis. porlung_credentials.toml)
+*credentials*.toml
+*credentials*.json
 
 # Local/private database files
 database/

@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from app_helpers import invert_current_phasors
+from app_helpers import invert_current_phasors, plotly_image_filename
 from fault_detection import estimate_sampling_rate
 from fault_type import (
     calculate_auto_fault_type_thresholds,
@@ -1639,6 +1639,7 @@ def render():
                 "colorbarPosition": False,
                 "colorbarTitleText": False,
             },
+            "toImageButtonOptions": {"filename": plotly_image_filename(line_display_name)},
         })
 
         if "two_ended_candidates" in st.session_state:

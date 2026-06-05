@@ -1,3 +1,5 @@
+import html as _html
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -6,6 +8,50 @@ from plotly.subplots import make_subplots
 from app_helpers import downsample_xy
 from line_analysis_helpers import build_remote_single_signed_position
 from waveform_helpers import fault_phase_to_current_channel, fault_phase_to_voltage_channel
+
+
+def build_cause_table_html(rows: list, col_specs: list) -> str:
+    """Bangun tabel HTML print-friendly dengan lebar kolom presisi + teks membungkus.
+
+    ``rows``: list of dict. ``col_specs``: list of dict
+    `{key, header, width, align}` (width mis. "22%", align "left"/"center").
+    """
+    is_dark = st.get_option("theme.base") == "dark"
+    border = "#334155" if is_dark else "#e2e8f0"
+    head_bg = "#1e293b" if is_dark else "#f1f5f9"
+    txt = "#e2e8f0" if is_dark else "#0f172a"
+
+    css = (
+        "<style>"
+        "table.porlung-cause{border-collapse:collapse;width:100%;font-size:0.85rem;"
+        f"color:{txt};table-layout:fixed;}}"
+        f"table.porlung-cause th,table.porlung-cause td{{border:1px solid {border};"
+        "padding:6px 10px;text-align:left;vertical-align:top;word-break:break-word;"
+        "overflow-wrap:anywhere;}"
+        f"table.porlung-cause th{{background:{head_bg};font-weight:600;}}"
+        "table.porlung-cause td.center,table.porlung-cause th.center{text-align:center;}"
+        "</style>"
+    )
+    cols_html = "".join(
+        f'<col style="width:{c.get("width","auto")}">' for c in col_specs
+    )
+    head = "".join(
+        f'<th{" class=\"center\"" if c.get("align") == "center" else ""}>'
+        f"{_html.escape(str(c['header']))}</th>"
+        for c in col_specs
+    )
+    body = ""
+    for r in rows:
+        cells = ""
+        for c in col_specs:
+            cls = ' class="center"' if c.get("align") == "center" else ""
+            cells += f"<td{cls}>{_html.escape(str(r.get(c['key'], '')))}</td>"
+        body += f"<tr>{cells}</tr>"
+    return (
+        css
+        + f'<table class="porlung-cause"><colgroup>{cols_html}</colgroup>'
+        + f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+    )
 
 
 def choose_summary_fault_signals(local_fault_type_result, remote_fault_type_result):
@@ -80,6 +126,18 @@ def build_summary_focus_waveform(
     return fig
 
 
+_DISTURBANCE_CAUSE_REFERENCES = (
+    "Minnaar (2014) *The Characterisation and Automatic Classification of Transmission Line Faults* "
+    "(tesis, Univ. Cape Town) — fitur diskriminatif: hour-of-day (peringkat #1), bulan/musim, fault type, "
+    "Rf, dan komponen sekuens (pos/neg/zero); "
+    "SEL (2011) *Introduction to Symmetrical Components* — tanda sekuens per tipe gangguan "
+    "(3-fasa: hanya positif; LL: positif+negatif tanpa zero; SLG: I0≈I1≈I2); "
+    "*Transmission Line Fault-Cause Identification* (Appl. Sci. 11, 7804); "
+    "*A Review and Taxonomy on Fault Analysis in Transmission Lines* (Computation 10, 144); "
+    "IEEE Std C37.114-2014 Sec. 3.1; Saha et al. (2010) Ch. 2."
+)
+
+
 def estimate_summary_disturbance_cause(
     fault_type_result,
     high_resistance_result,
@@ -89,175 +147,313 @@ def estimate_summary_disturbance_cause(
     two_result=None,
     two_quality=None,
     line_param=None,
+    fault_hour=None,
+    fault_month=None,
+    weather_context=None,
+    waveform_signatures=None,
 ):
-    # single_result, two_result, two_quality, line_param reserved for future use
-    """Kembalikan (cause_label: str, detail: dict) berisi basis, penjelasan, referensi, dan catatan."""
+    """Estimasi penyebab gangguan via candidate-scoring berbasis literatur.
+
+    Mengembalikan ``(label, detail)``. ``detail`` berisi: ``basis`` (tabel fakta
+    terukur), ``candidates`` (daftar kandidat ter-ranking + skor + bukti),
+    ``explanation``, ``note``, ``references``.
+
+    Fitur diskriminatif: fault type & ground involvement, komponen simetris,
+    fault resistance (Rf), **hour-of-day** (puncak diurnal bird streamer ~06:00 &
+    ~22:00), **bulan/musim** (kemarau Indonesia → kebakaran lahan), **cuaca**
+    lokasi (badai petir/hujan/kabut → petir/polusi), dan **tanda waveform**
+    (transien/HF, durasi, reclose). Konteks Indonesia/tropis.
+
+    ``weather_context``: dict `{code,desc,rain_mm,humidity}` cuaca SAAT INI di
+    lokasi (OpenWeather) — hanya valid untuk gangguan baru, beri caveat.
+    ``waveform_signatures``: dict dari `waveform_signatures.py` (hf_ratio,
+    di_dt_norm, duration_ms, cleared_in_record, transient_label, dst).
+    """
     fault_type   = str((fault_type_result or {}).get("fault_type", "")).upper()
     hr_suspected = bool((high_resistance_result or {}).get("high_resistance_suspected"))
     rf_est       = float((high_resistance_result or {}).get("Rf_est_ohm") or 0.0)
-    ft_metrics   = (fault_type_result or {}).get("metrics", {}) or {}
     ft_conf      = float((fault_type_result or {}).get("confidence", 0.0))
-    line_len     = float((line_param or {}).get("length_km") or 0.0)
+    n_phases     = sum(1 for c in fault_type if c in "ABC")
+    ground       = "G" in fault_type
+    low_rf       = (not hr_suspected) and (rf_est < 8.0)
+    try:
+        hour = int(fault_hour) if fault_hour is not None else None
+    except (TypeError, ValueError):
+        hour = None
+    bird_window = hour is not None and (hour in (5, 6, 7) or hour in (21, 22, 23, 0))
 
-    # ── helper: ambil magnitude phasor ────────────────────────────────
+    # ── Konteks musim (Indonesia tropis: kemarau ~Mei–Okt, hujan ~Nov–Apr) ──
+    try:
+        month = int(fault_month) if fault_month is not None else None
+    except (TypeError, ValueError):
+        month = None
+    dry_season = month in (5, 6, 7, 8, 9, 10) if month is not None else False
+    wet_season = month in (11, 12, 1, 2, 3, 4) if month is not None else False
+
+    # ── Konteks cuaca SAAT INI di lokasi (caveat: bukan saat kejadian) ──
+    wx = weather_context or {}
+    wx_code = wx.get("code")
+    wx_rain = float(wx.get("rain_mm") or 0.0)
+    wx_hum  = float(wx.get("humidity") or 0.0)
+    wx_thunder = isinstance(wx_code, (int, float)) and 200 <= wx_code < 300
+    wx_wet     = (wx_rain > 0) or (isinstance(wx_code, (int, float)) and (300 <= wx_code < 600 or 700 <= wx_code < 800)) or (wx_hum >= 90)
+    wx_dryclear = isinstance(wx_code, (int, float)) and wx_code == 800 and wx_hum and wx_hum < 60
+
+    # ── Tanda waveform (dari waveform_signatures.py) ──
+    wf = waveform_signatures or {}
+    wf_transient_sharp = bool(wf.get("transient_sharp"))   # HF/di-dt tinggi → impulsif
+    wf_cleared = wf.get("cleared_in_record")               # True=clear (temporer), False=bertahan
+    wf_duration_ms = wf.get("duration_ms")
+
     def _mag(d, key):
         return float((d or {}).get(key, {}).get("magnitude") or 0.0)
 
-    def _num_basis(extra: list) -> list:
-        """Tambah data numerik fault ke basis jika tersedia."""
-        def _row(p, v):
-            return {"Parameter": p, "Nilai": v}
+    def _row(p, v):
+        return {"Parameter": p, "Nilai": v}
 
-        rows = list(extra)  # extra sudah berupa list of {"Parameter", "Nilai"}
-
-        if ft_conf > 0:
-            rows.append(_row("Keyakinan Klasifikasi Fault Type", f"{ft_conf:.1f} / 10"))
-
-        # Arus dan tegangan fasa terganggu vs pre-fault
-        faulted_phases = (fault_type_result or {}).get("faulted_phases", [])
-        for ph in faulted_phases[:2]:
-            i_key = f"I{ph.lower()}" if ph in "ABC" else None
-            v_key = f"V{ph.lower()}" if ph in "ABC" else None
-            if i_key:
-                i_fault = _mag(phasors, i_key)
-                i_pre   = _mag(prefault_phasors, i_key)
-                v_fault = _mag(phasors, v_key) if v_key else 0.0
-                v_pre   = _mag(prefault_phasors, v_key) if v_key else 0.0
-                if i_fault > 0:
-                    i_ratio = (i_fault / i_pre * 100 - 100) if i_pre > 0 else 0.0
-                    i_str = f"{i_fault:,.1f} A (fault)"
-                    if i_pre > 0:
-                        i_str += f"  ←  {i_pre:,.1f} A (pre-fault),  naik +{i_ratio:.0f}%"
-                    rows.append(_row(f"Arus Fasa {ph}", i_str))
-                if v_fault > 0 and v_pre > 0:
-                    v_drop = (1 - v_fault / v_pre) * 100
-                    rows.append(_row(
-                        f"Tegangan Fasa {ph}",
-                        f"{v_fault / 1000:.2f} kV (fault)  ←  {v_pre / 1000:.2f} kV (pre-fault),  turun {v_drop:.1f}%",
-                    ))
-
-        # IE / arus netral
-        ie_fault = _mag(phasors, "IE")
-        ie_pre   = _mag(prefault_phasors, "IE")
-        if ie_fault > 0:
-            ie_str = f"{ie_fault:,.1f} A (fault)"
-            if ie_pre > 0:
-                ie_str += f"  ←  {ie_pre:,.1f} A (pre-fault)"
-            rows.append(_row("Arus Netral IE", ie_str))
-
-        return rows
-
+    # ── Tabel fakta terukur (basis) ──────────────────────────────────
+    basis = []
+    if fault_type:
+        _gt = "ke tanah" if ground else "fase-fase"
+        basis.append(_row("Fault Type", f"{fault_type} — {n_phases} fasa terganggu, {_gt}"))
+    if ft_conf > 0:
+        basis.append(_row("Keyakinan Klasifikasi", f"{ft_conf:.1f} / 10"))
     if hr_suspected:
-        _hr_angle = float((high_resistance_result or {}).get("angle_deviation_deg") or 0.0)
-        _hr_conf  = float((high_resistance_result or {}).get("analysis_confidence") or 0.0)
-        return (
-            "Pohon / Benda Asing",
-            {
-                "basis": _num_basis([
-                    {"Parameter": "Fault Type Terdeteksi", "Nilai": fault_type or "tidak terdeteksi"},
-                    {"Parameter": "Resistansi Gangguan (Rf)", "Nilai": f"{rf_est:.1f} Ω — melewati threshold high-resistance"},
-                    {"Parameter": "Deviasi Sudut Impedansi vs Z₁", "Nilai": f"{_hr_angle:.1f}°"},
-                    {"Parameter": "Keyakinan Analisis HR", "Nilai": f"{_hr_conf:.1f} / 10"},
-                ]),
-                "explanation": (
-                    "Gangguan dengan resistansi tinggi umumnya disebabkan kontak pohon, benda asing konduktif, "
-                    "atau tanah kering/berpasir di titik gangguan. Busur api yang panjang juga dapat menghasilkan "
-                    "Rf yang tinggi pada gangguan fase-ke-tanah."
-                ),
-                "references": (
-                    "Saha et al. (2010) Ch. 6 — high-resistance fault analysis; "
-                    "IEEE Std C37.114-2014 Sec. 5.4 — resistive fault detection"
-                ),
-                "note": (
-                    "Validasi dengan inspeksi lapangan dan data cuaca. "
-                    "Rf tinggi bukan bukti mutlak pohon — bisa juga benda asing, busur api panjang, atau kondisi tanah."
-                ),
-            },
-        )
+        basis.append(_row("Resistansi Gangguan (Rf)", f"{rf_est:.1f} Ω — tinggi (indikasi high-resistance)"))
+    elif rf_est > 0:
+        basis.append(_row("Resistansi Gangguan (Rf)", f"≈ {rf_est:.1f} Ω — rendah/normal"))
+    if hour is not None:
+        basis.append(_row("Jam Kejadian (CFG)", f"{hour:02d}:xx"))
+    # Arus/tegangan fasa terganggu vs pre-fault
+    for ph in (fault_type_result or {}).get("faulted_phases", [])[:2]:
+        if ph not in "ABC":
+            continue
+        i_f, i_p = _mag(phasors, f"I{ph.lower()}"), _mag(prefault_phasors, f"I{ph.lower()}")
+        if i_f > 0:
+            s = f"{i_f:,.1f} A (fault)"
+            if i_p > 0:
+                s += f"  ←  {i_p:,.1f} A (pre-fault),  naik +{(i_f / i_p * 100 - 100):.0f}%"
+            basis.append(_row(f"Arus Fasa {ph}", s))
+    ie_f, ie_p = _mag(phasors, "IE"), _mag(prefault_phasors, "IE")
+    if ie_f > 0:
+        s = f"{ie_f:,.1f} A (fault)"
+        if ie_p > 0:
+            s += f"  ←  {ie_p:,.1f} A (pre-fault)"
+        basis.append(_row("Arus Netral IE", s))
 
+    # ── Komponen simetris (SEL, Intro to Symmetrical Components) ──────
+    # 3-fasa  → hanya positif (I2≈I0≈0); LL → positif+negatif tanpa zero (I0≈0);
+    # SLG    → I0≈I1≈I2; zero-sequence hanya muncul pada gangguan ke tanah.
+    i1_m, i2_m, i0_m = _mag(phasors, "I1"), _mag(phasors, "I2"), _mag(phasors, "I0")
+    v2_m, v0_m = _mag(phasors, "V2"), _mag(phasors, "V0")
+    r_i2_i1 = (i2_m / i1_m) if i1_m > 1e-6 else 0.0   # derajat asimetri
+    r_i0_i1 = (i0_m / i1_m) if i1_m > 1e-6 else 0.0   # keterlibatan tanah
+    r_i0_i2 = (i0_m / i2_m) if i2_m > 1e-6 else 0.0   # kemurnian SLG (≈1)
+
+    # Flag untuk scoring (ambang konservatif)
+    clean_slg_seq = (r_i0_i1 >= 0.5) and (0.6 <= r_i0_i2 <= 1.5)   # I0≈I1≈I2
+    balanced_seq  = (r_i2_i1 < 0.10) and (r_i0_i1 < 0.10)          # nyaris hanya positif
+
+    if i1_m > 0:
+        basis.append(_row(
+            "Negatif/Positif (I2/I1)",
+            f"{r_i2_i1:.2f} — " + ("asimetri kuat (tak seimbang)" if r_i2_i1 >= 0.3 else "rendah (mendekati seimbang)"),
+        ))
+        basis.append(_row(
+            "Zero/Positif (I0/I1)",
+            f"{r_i0_i1:.2f} — " + ("keterlibatan tanah kuat" if r_i0_i1 >= 0.3 else "keterlibatan tanah lemah/tidak ada"),
+        ))
+        if i2_m > 1e-6 and ground:
+            basis.append(_row(
+                "Zero/Negatif (I0/I2)",
+                f"{r_i0_i2:.2f} — " + ("≈1 → pola SLG murni (I0≈I1≈I2)" if 0.6 <= r_i0_i2 <= 1.5 else "menyimpang dari SLG murni"),
+            ))
+    # Rasio tegangan sekuens, sudut sekuens, impedansi sekuens (Z1/Z2/Z0)
+    def _ang(key):
+        return float((phasors or {}).get(key, {}).get("angle_deg") or 0.0)
+
+    def _cplx(key):
+        return (phasors or {}).get(key, {}).get("complex")
+
+    v1_m = _mag(phasors, "V1")
+    r_v2_v1 = (v2_m / v1_m) if v1_m > 1e-6 else 0.0
+    r_v0_v1 = (v0_m / v1_m) if v1_m > 1e-6 else 0.0
+    def _wrap(d):  # normalisasi beda sudut ke [-180, 180]
+        return ((d + 180.0) % 360.0) - 180.0
+    ang_i2_i1 = _wrap(_ang("I2") - _ang("I1")) if (i1_m > 1e-6 and i2_m > 1e-6) else None
+    ang_i0_i1 = _wrap(_ang("I0") - _ang("I1")) if (i1_m > 1e-6 and i0_m > 1e-6) else None
+
+    if v1_m > 0 and (v2_m > 0 or v0_m > 0):
+        basis.append(_row(
+            "Negatif/Positif Tegangan (V2/V1)",
+            f"{r_v2_v1:.2f} — " + ("depresi tegangan asimetris kuat" if r_v2_v1 >= 0.15 else "rendah"),
+        ))
+        basis.append(_row("Zero/Positif Tegangan (V0/V1)", f"{r_v0_v1:.2f}"))
+    if ang_i2_i1 is not None or ang_i0_i1 is not None:
+        _parts = []
+        if ang_i2_i1 is not None:
+            _parts.append(f"∠I2−∠I1 = {ang_i2_i1:+.0f}°")
+        if ang_i0_i1 is not None:
+            _parts.append(f"∠I0−∠I1 = {ang_i0_i1:+.0f}°")
+        basis.append(_row("Sudut Sekuens", ", ".join(_parts)))
+    # Impedansi sekuens Z = V_seq / I_seq (magnitude, primary ohm)
+    _zparts = []
+    for _zn, _vn, _in_, _im in (("Z1", "V1", "I1", i1_m), ("Z2", "V2", "I2", i2_m), ("Z0", "V0", "I0", i0_m)):
+        _vc, _ic = _cplx(_vn), _cplx(_in_)
+        if _vc is not None and _ic is not None and _im > 1e-6:
+            _zparts.append(f"|{_zn}| ≈ {abs(_vc / _ic):.1f} Ω")
+    if _zparts:
+        basis.append(_row("Impedansi Sekuens", ", ".join(_zparts)))
+
+    # ── Konteks musim / cuaca / waveform ─────────────────────────────
+    if month is not None:
+        basis.append(_row("Bulan Kejadian", f"{month:02d} — " + ("musim kemarau" if dry_season else "musim hujan" if wet_season else "-")))
+    if wx:
+        _wxdesc = str(wx.get("desc") or "-")
+        _wxextra = []
+        if wx_thunder: _wxextra.append("badai petir")
+        if wx_wet and not wx_thunder: _wxextra.append("basah/lembap")
+        if wx_dryclear: _wxextra.append("cerah-kering")
+        basis.append(_row("Cuaca Lokasi (saat ini)", f"{_wxdesc}" + (f" — {', '.join(_wxextra)}" if _wxextra else "") + "  *(bukan saat kejadian)*"))
+    if wf:
+        if wf_duration_ms is not None:
+            basis.append(_row("Durasi Gangguan (rekaman)", f"≈ {wf_duration_ms:.0f} ms" + ("  (clear dalam rekaman)" if wf_cleared else "  (bertahan s.d. akhir rekaman)" if wf_cleared is False else "")))
+        if "hf_ratio" in wf:
+            basis.append(_row("Kandungan HF / Transien", f"HF ratio ≈ {wf.get('hf_ratio'):.2f}, di/dt ≈ {wf.get('di_dt_norm', 0):.1f}" + ("  → transien tajam (impulsif)" if wf_transient_sharp else "")))
+
+    # ── Kasus 3 fasa simetris: power swing / non-eksternal ───────────
     if fault_type in ["ABC", "ABCG", "3PH", "3P"]:
         return (
             "Power Swing / Gangguan 3 Fasa",
             {
-                "basis": _num_basis([
-                    {"Parameter": "Fault Type Terdeteksi", "Nilai": f"{fault_type} — ketiga fasa terganggu bersamaan"},
-                    {"Parameter": "Karakteristik", "Nilai": "Gangguan simetris 3 fasa jarang disebabkan petir — lebih sering akibat power swing atau eskalasi fault"},
-                ]),
+                "basis": basis,
+                "candidates": [{
+                    "Penyebab": "Power Swing / Gangguan 3 Fasa", "Skor": 0,
+                    "Bukti": "Gangguan simetris 3 fasa jarang disebabkan petir/satwa — lebih sering power swing, eskalasi fault, atau kegagalan peralatan."
+                    + (" Komponen sekuens nyaris hanya positif (I2/I1 & I0/I1 ≈ 0), konsisten gangguan seimbang." if balanced_seq else ""),
+                }],
                 "explanation": (
-                    "Gangguan tiga fasa simetris dapat disebabkan oleh power swing yang berujung kehilangan sinkronisasi, "
-                    "atau ground fault satu fasa yang berkembang menjadi 3 fasa. "
-                    "Perlu diverifikasi dengan event relay, catatan osilasi daya, dan riwayat pembebanan sistem."
+                    "Gangguan tiga fasa simetris perlu diverifikasi dengan event relay, catatan osilasi daya, "
+                    "dan kondisi pembebanan sistem saat kejadian."
                 ),
-                "references": (
-                    "Anderson (1995) Analysis of Faulted Power Systems Ch. 10; "
-                    "IEEE Std C37.114-2014 Sec. 5.5"
-                ),
-                "note": (
-                    "Bandingkan dengan event CB (Circuit Breaker / pemutus tenaga), SOE (Sequence of Events / log urutan kejadian relay), "
-                    "dan kondisi sistem saat kejadian untuk memastikan penyebab."
-                ),
+                "references": _DISTURBANCE_CAUSE_REFERENCES,
+                "note": "Bandingkan dengan event CB, SOE relay, dan kondisi sistem untuk memastikan penyebab.",
             },
         )
 
-    if "G" in fault_type and any(phase in fault_type for phase in ["A", "B", "C"]):
-        _n_phases = sum(1 for c in fault_type if c in "ABC")
-        if _n_phases == 1:
-            return (
-                "Petir / Flashover Satu Fasa ke Tanah",
-                {
-                    "basis": _num_basis([
-                        {"Parameter": "Fault Type Terdeteksi", "Nilai": f"{fault_type} — gangguan satu fasa ke tanah"},
-                        {"Parameter": "Resistansi Gangguan (Rf)", "Nilai": f"{'≈ ' + str(round(rf_est, 1)) + ' Ω — ' if rf_est > 0 else ''}rendah/normal, tidak ada indikasi high-resistance"},
-                        {"Parameter": "Statistik", "Nilai": "SLG (Single Line-to-Ground) ≈ 70–80% dari total gangguan transmisi"},
-                    ]),
-                    "explanation": (
-                        "Gangguan satu fasa ke tanah dengan impedansi rendah paling sering disebabkan flashover "
-                        "akibat sambaran petir langsung atau induksi, atau kontak benda asing konduktif yang singkat. "
-                        "Durasi gangguan singkat dan reclosing berhasil mendukung hipotesis flashover petir."
-                    ),
-                    "references": (
-                        "IEEE Std C37.114-2014 Sec. 3.1 — fault classification; "
-                        "Saha et al. (2010) Ch. 2 — SLG (Single Line-to-Ground) fault statistics and characteristics"
-                    ),
-                    "note": (
-                        "Konfirmasi dengan data sambaran petir (lightning arrester counter, BMKG/weather data) "
-                        "dan hasil inspeksi tower di titik gangguan."
-                    ),
-                },
-            )
-        else:
-            return (
-                "Gangguan Multi-Fasa ke Tanah",
-                {
-                    "basis": _num_basis([
-                        {"Parameter": "Fault Type Terdeteksi", "Nilai": f"{fault_type} — lebih dari satu fasa terganggu ke tanah"},
-                        {"Parameter": "Kemungkinan Skenario", "Nilai": "SLG yang berkembang, flashover multi-fasa, atau dua gangguan bersamaan"},
-                    ]),
-                    "explanation": (
-                        "Gangguan dua fasa ke tanah lebih jarang dari SLG (Single Line-to-Ground) dan bisa merupakan eskalasi dari gangguan satu fasa, "
-                        "atau akibat sambaran petir yang memengaruhi lebih dari satu konduktor bersamaan."
-                    ),
-                    "references": (
-                        "IEEE Std C37.114-2014 Sec. 3.1; "
-                        "Anderson (1995) Analysis of Faulted Power Systems Ch. 9"
-                    ),
-                    "note": "Periksa apakah ada dua titik gangguan terpisah atau satu lokasi gangguan multi-fasa.",
-                },
-            )
+    # ── Candidate scoring untuk gangguan 1–2 fasa (ke tanah/fase) ────
+    candidates = []  # {label, score, evidence: [str]}
+
+    def _cand(label, score, evidence):
+        candidates.append({"label": label, "score": score, "evidence": evidence})
+
+    # Petir / Sambaran Petir
+    ev = []; sc = 0
+    if ground:
+        sc += 2; ev.append("gangguan ke tanah — pola umum flashover sambaran petir")
+    if low_rf:
+        sc += 2; ev.append("Rf rendah → busur cepat khas petir, bukan kontak resistif")
+    if n_phases == 1:
+        sc += 1; ev.append("SLG — tipe paling umum untuk induksi/sambaran petir")
+    if clean_slg_seq:
+        sc += 1; ev.append("komponen sekuens SLG murni (I0≈I1≈I2) — konsisten flashover satu fasa ke tanah")
+    if wf_transient_sharp:
+        sc += 2; ev.append("waveform: transien/HF tajam (impulsif) di awal gangguan — tanda kuat sambaran petir")
+    if wf_cleared is True:
+        sc += 1; ev.append("gangguan clear dalam rekaman (temporer) — konsisten flashover petir + reclose sukses")
+    if wx_thunder:
+        sc += 1; ev.append("cuaca lokasi saat ini: badai petir (caveat: bukan saat kejadian)")
+    ev.append("Indonesia: kerapatan sambaran petir sangat tinggi sepanjang tahun")
+    _cand("Sambaran Petir / Flashover", sc, ev)
+
+    # Vegetasi / Pohon
+    ev = []; sc = 0
+    if hr_suspected or rf_est >= 10:
+        sc += 3; ev.append(f"Rf tinggi (≈ {rf_est:.1f} Ω) → kontak resistif khas pohon/vegetasi")
+    if ground:
+        sc += 1; ev.append("gangguan ke tanah konsisten dengan kontak vegetasi")
+    if (hr_suspected or rf_est >= 10) and r_i0_i1 >= 0.3:
+        sc += 1; ev.append(f"zero-sequence kuat (I0/I1 ≈ {r_i0_i1:.2f}) menegaskan jalur arus ke tanah")
+    if wf_cleared is False:
+        sc += 1; ev.append("gangguan bertahan/tidak clear (cenderung permanen) — konsisten kontak vegetasi persisten")
+    if wf_transient_sharp:
+        sc -= 1; ev.append("transien tajam kurang konsisten dengan kontak resistif lambat")
+    if low_rf:
+        sc -= 2; ev.append("Rf rendah kurang konsisten dengan kontak vegetasi")
+    _cand("Vegetasi / Pohon", sc, ev)
+
+    # Satwa Liar (bird streamer / animal)
+    ev = []; sc = 0
+    if n_phases == 1 and ground:
+        sc += 2; ev.append("SLG khas bird streamer / satwa menjembatani celah udara")
+    if clean_slg_seq:
+        sc += 1; ev.append("pola sekuens SLG murni (I0≈I1≈I2) khas streamer satu fasa ke tanah")
+    if bird_window:
+        sc += 3; ev.append(f"jam kejadian ({hour:02d}:xx) dekat puncak diurnal bird streamer ~06:00 & ~22:00 (Minnaar 2014)")
+    elif hour is not None:
+        ev.append(f"jam kejadian ({hour:02d}:xx) di luar puncak diurnal bird streamer")
+    if wf_cleared is True and (wf_duration_ms is not None and wf_duration_ms <= 100):
+        sc += 1; ev.append("durasi pendek + clear (temporer) — konsisten kontak satwa sesaat")
+    if low_rf:
+        sc += 1; ev.append("Rf rendah konsisten dengan flashover streamer")
+    _cand("Satwa Liar (Bird Streamer)", sc, ev)
+
+    # Flashover Polusi / Isolator
+    ev = []; sc = 0
+    if n_phases >= 2:
+        sc += 1; ev.append("dapat melibatkan >1 fasa saat lapisan polutan basah flashover")
+    if ground:
+        sc += 1; ev.append("flashover sepanjang permukaan isolator ke tanah")
+    if wx_wet:
+        sc += 2; ev.append("cuaca lokasi basah/lembap (hujan/kabut/RH tinggi) — pemicu flashover polusi (caveat: bukan saat kejadian)")
+    if wet_season:
+        sc += 1; ev.append("musim hujan — pembasahan isolator lebih mungkin")
+    ev.append("perlu pembasahan (kabut/embun/hujan ringan); sering berulang pada lokasi yang sama")
+    _cand("Flashover Polusi / Isolator", sc, ev)
+
+    # Kebakaran di bawah saluran
+    ev = []; sc = 0
+    if n_phases >= 2:
+        sc += 1; ev.append("kebakaran lahan dapat menurunkan kuat dielektrik udara → flashover multi-fasa")
+    if low_rf:
+        sc += 1; ev.append("Rf rendah konsisten dengan flashover melalui udara terionisasi")
+    if dry_season:
+        sc += 1; ev.append("musim kemarau — risiko kebakaran lahan meningkat (Sumatra/Kalimantan)")
+    if wx_dryclear:
+        sc += 1; ev.append("cuaca lokasi cerah-kering — mendukung kondisi rawan kebakaran (caveat: bukan saat kejadian)")
+    ev.append("verifikasi dengan hotspot AFIS/satelit di sekitar titik gangguan")
+    _cand("Kebakaran di Bawah Saluran", sc, ev)
+
+    candidates.sort(key=lambda c: -c["score"])
+    top = candidates[0]
+    runner = candidates[1] if len(candidates) > 1 else None
+    # Ambang keyakinan: skor top rendah atau selisih tipis → belum yakin
+    decisive = top["score"] >= 3 and (runner is None or top["score"] - runner["score"] >= 1)
+    label = top["label"] if decisive else "Indikasi Awal (perlu validasi lapangan)"
+
+    cand_rows = [
+        {"Penyebab": c["label"], "Skor": c["score"], "Bukti": "; ".join(c["evidence"])}
+        for c in candidates if c["score"] > 0
+    ] or [{"Penyebab": top["label"], "Skor": top["score"], "Bukti": "; ".join(top["evidence"])}]
+
+    explanation = (
+        f"Kandidat terkuat: **{top['label']}** (skor {top['score']}). "
+        + ("Selisih dengan kandidat berikutnya cukup jelas. " if decisive else
+           "Selisih antar kandidat tipis — perlakukan sebagai indikasi awal, bukan kesimpulan. ")
+        + "Skor disusun dari fault type, komponen simetris (I0/I1/I2 + sudut/impedansi), resistansi gangguan, jam & bulan kejadian, cuaca lokasi, dan tanda waveform (transien/durasi/reclose) sesuai fitur diskriminatif literatur."
+    )
 
     return (
-        "Belum Dapat Ditentukan",
+        label,
         {
-            "basis": _num_basis([
-                {"Parameter": "Fault Type", "Nilai": fault_type or "tidak terdeteksi"},
-                {"Parameter": "Status", "Nilai": "Pola impedansi dan fault type belum cukup untuk klasifikasi otomatis"},
-            ]),
-            "explanation": (
-                "Data yang tersedia belum memberikan pola yang kuat untuk menentukan penyebab gangguan secara otomatis."
-            ),
-            "references": "",
+            "basis": basis,
+            "candidates": cand_rows,
+            "explanation": explanation,
+            "references": _DISTURBANCE_CAUSE_REFERENCES,
             "note": (
-                "Lakukan analisis manual dengan mempertimbangkan data cuaca, riwayat gangguan, dan inspeksi lapangan."
+                "Penyebab final tetap perlu bukti eksternal: data sambaran petir (BMKG/lightning counter), "
+                "hotspot kebakaran (AFIS/satelit), inspeksi tower (bekas flashover/streamer/jejak satwa), "
+                "dan kondisi cuaca saat kejadian. Estimasi ini berbasis pola rekaman, bukan diagnosis pasti."
             ),
         },
     )

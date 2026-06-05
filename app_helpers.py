@@ -1,5 +1,7 @@
 import cmath
 import math
+import re
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -8,6 +10,19 @@ import streamlit as st
 MAX_PLOT_POINTS = 6000
 
 OHM = chr(0x03A9)
+
+
+def plotly_image_filename(line_name: str | None, prefix: str = "porlungplot") -> str:
+    """Nama file unduhan plot saat tombol kamera ditekan.
+
+    Format: porlungplot_{nama_line}_{YYYYMMDD}_{HHMMSS}. nama_line dibersihkan
+    dari karakter non-alfanumerik. Timestamp = waktu plot dirender.
+    """
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", str(line_name or "").strip()).strip("_")
+    if not safe:
+        safe = "line"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{prefix}_{safe}_{ts}"
 
 
 def downsample_xy(x_values, y_values, max_points: int = MAX_PLOT_POINTS):

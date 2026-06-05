@@ -212,7 +212,7 @@ Confidence 0–10 + evidence score ditampilkan. Ref: Saha (2010) Ch. 6; IEEE C37
 
 ## 5. Pemetaan Literatur & Status Implementasi
 
-PDF sumber ada di [`literature/`](literature/). Ringkasan pembanding di memory `fault_location_references.md`.
+PDF sumber ada di [`literature/calculations/`](literature/calculations/). Ringkasan pembanding di memory `fault_location_references.md`.
 
 | Topik | Formula | Referensi | Status |
 |---|---|---|---|
@@ -240,3 +240,32 @@ Formula + nilai aktual ditampilkan ke user via expander:
 - Fault cursor: `render_fault_cursor_explanation` (`fault_workflow_helpers.py`) — tabel + langkah + referensi
 
 Expander adalah representasi runtime; **file ini adalah referensi statis** untuk audit/review.
+
+---
+
+## 7. Tanda Penyebab Gangguan (komponen simetris + waveform)
+
+Dipakai oleh `estimate_summary_disturbance_cause` (`summary_helpers.py`) dan `waveform_signatures.py`. Rincian literatur di memory `fault_cause_references`.
+
+### 7.1 Komponen simetris (SEL — Intro to Symmetrical Components)
+
+```
+[I0; I1; I2] = (1/3) · [[1,1,1],[1,a,a²],[1,a²,a]] · [Ia; Ib; Ic],  a = 1∠120°
+```
+Rasio diskriminatif: `I2/I1` (asimetri), `I0/I1` (keterlibatan tanah), `I0/I2` (kemurnian SLG ≈1), `V2/V1`, `V0/V1`. Impedansi sekuens `Z1=V1/I1`, `Z2=V2/I2`, `Z0=V0/I0`. Tanda per tipe:
+- 3-fasa: hanya positif (`I2≈0`, `I0≈0`) → `balanced_seq`
+- LL: positif+negatif, tanpa zero (`I0≈0`)
+- SLG: `I0≈I1≈I2` → `clean_slg_seq` (`I0/I1≥0.5` dan `0.6≤I0/I2≤1.5`)
+
+### 7.2 Tanda waveform (Benner & Russell; Minnaar 2014)
+
+```
+di_dt_norm = max|di/dt| / (ω · Î_peak),   Î_peak = √2 · I_RMS(fault),  ω = 2πf
+hf_ratio   = ‖FFT(seg)[2:]‖ / FFT(seg)[1],  seg = 1 siklus onset (window rektangular)
+transient_sharp = (di_dt_norm ≥ 3) OR (hf_ratio ≥ 0.5)   → khas sambaran petir
+```
+Durasi & clear: dari RMS sliding 1 siklus `|max fasa|` — cari **kenaikan** (≥ `1.5×` pre-fault RMS) lalu **penurunan** kembali. `cleared_in_record=True` → temporer (petir/satwa); `False` → permanen (vegetasi/isolator). `reclose_in_record` bila RMS naik lagi setelah clear + dead time. **[ambang engineering default]**
+
+### 7.3 Candidate-scoring (5 penyebab)
+
+Skor dari kombinasi: fault type/ground, komponen simetris, Rf, hour-of-day (bird streamer ~06:00 & ~22:00), bulan/musim (tropis Indonesia), cuaca lokasi (caveat: current ≠ fault-time), tanda waveform. Label tegas bila skor top ≥3 dan selisih ke runner-up ≥1; jika tidak → "Indikasi Awal". Ref: Minnaar (2014); Jian (2021/2022); Benner & Russell. **Bukan diagnosis pasti — perlu bukti lapangan.**

@@ -272,3 +272,52 @@ Setiap sheet menggunakan helper normalisasi yang berbeda:
 ### Interpolasi Fault pada Tower Map
 
 Posisi fault diinterpolasi dari kolom `KUMULATIF km` (bukan `JARAK km`). Dua tower pengapit dicari berdasarkan nilai KUMULATIF yang mengapit jarak fault, lalu koordinat lat/lon diinterpolasi secara linear.
+
+---
+
+## Sheet: `fault_cause` (ditulis aplikasi)
+
+Default sheet name: `fault_cause` (override opsional via `fault_cause_sheet_name`). Berada di **Database Spreadsheet** (sama dengan `distance_settings`, tower schedule, data konduktor).
+
+Dataset berlabel untuk pelatihan ML penentuan penyebab gangguan. **Ditulis** oleh aplikasi via Sheets API v4 (service account, scope `spreadsheets`) — bukan dibaca. Header auto-migrasi bila berbeda dari `DATASET_COLUMNS`; sheet dibuat otomatis bila belum ada. Spreadsheet harus di-share **Editor** ke email service account.
+
+**Upsert berdasarkan `case_id` (kolom A):** `case_id = sha1(line_name|fault_time_cfg)[:16]`. Bila `case_id` cocok dengan baris yang ada → baris **di-update** (bukan duplikat); bila tidak → append. Re-analisis rekaman yang sama (line + waktu kejadian sama) memperbarui baris yang sama. `case_id` kosong (tak ada identitas) → selalu append.
+
+Dirakit oleh `fault_cause_dataset.build_fault_cause_feature_row()` (43 kolom, `DATASET_COLUMNS`):
+
+| Grup | Kolom |
+|---|---|
+| **Kunci unik** | `case_id` (kolom A — upsert key) |
+| Metadata | `timestamp_analyzed`, `fault_time_cfg`, `line_name`, `gi_local`, `gi_remote` |
+| Fault type | `fault_type`, `n_phases`, `ground`, `ft_confidence` |
+| Komponen simetris | `I0_A`,`I1_A`,`I2_A`, `r_i2_i1`,`r_i0_i1`,`r_i0_i2`, `ang_i2_i1_deg`,`ang_i0_i1_deg`, `r_v2_v1`,`r_v0_v1`, `Z1_ohm`,`Z2_ohm`,`Z0_ohm` |
+| Resistansi | `rf_est_ohm`, `hr_suspected` |
+| Waktu | `hour`, `month` |
+| Cuaca | `weather_code`, `weather_desc`, `rain_mm`, `humidity_pct` |
+| Waveform | `di_dt_norm`, `hf_ratio`, `transient_sharp`, `duration_ms`, `cleared_in_record`, `reclose_in_record` |
+| Lokasi | `se_distance_km`, `de_distance_km`, `de_quality` |
+| Prediksi rule | `predicted_cause`, `predicted_score` |
+| **Target (label)** | `confirmed_cause` (diisi user dari `CONFIRMED_CAUSE_LABELS` setelah inspeksi) |
+
+---
+
+## Sheet: `saved_cases` + `saved_cases_data` (ditulis & dibaca aplikasi)
+
+Simpan/muat case via spreadsheet — **TANPA Google Drive** (service account akun personal tidak punya kuota Drive → `storageQuotaExceeded`). **Ditulis & dibaca** via Sheets API (service account). Upsert by `case_id` (kolom A). Di **Database Spreadsheet**. Override sheet name via `saved_cases_sheet_name`.
+
+**`saved_cases`** = indeks ringkas (1 baris/case):
+
+| Kolom | Isi |
+|---|---|
+| `case_id` | `sha1(line_name\|fault_time_cfg)[:16]` — kunci upsert |
+| `case_name` | Nama case (slug line) |
+| `line_name`, `gi_local`, `gi_remote` | Identitas saluran |
+| `fault_time_cfg` | Timestamp CFG (trigger/start) |
+| `saved_at` | ISO timestamp saat disimpan (untuk urut daftar) |
+| `filename` | Nama file ZIP internal |
+| `size_bytes` | Ukuran ZIP |
+| `n_chunks` | Jumlah chunk payload di `saved_cases_data` |
+
+**`saved_cases_data`** = payload (1 baris/case, dibuat dgn ~200 kolom): `[case_id, chunk0, chunk1, ...]`. Payload = ZIP case → base64, dipecah ≤49000 char/sel (di bawah batas 50.000). Ditulis RAW (agar base64 tak jadi formula). Load: cari baris by `case_id` → gabung sel chunk → base64 decode → `restore_case_archive`.
+
+Load: pilih baris (urut `saved_at` desc) → download `drive_file_id` dari Drive → `restore_case_archive`. Payload **tidak** disimpan di sheet (hanya indeks); folder Drive harus di-share Editor ke service account.

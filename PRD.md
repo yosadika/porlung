@@ -315,7 +315,15 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Jika kalkulasi belum lengkap, tampilkan `Pending`, bukan halaman blank.
 - Konten: metadata local/remote, status Signal Assignment/Fault Cursor/Phasor/Fault Type/Line Parameter/SE/DE, Key Results, Status Diagnostik DE, IE source local/remote, perbandingan prefault/fault, waveform fokus opsional, estimasi penyebab gangguan, grafik SE/DE, Tower Map Fault Location, cuaca terkini + forecast, R-X Locus local/remote, warning kualitas DE/HR.
 - **Key Results** disusun 2 baris: (1) Fault Type + Prediksi Penyebab (ringkas); (2) SE dari GI lokal, SE dari GI remote (jarak asli dari masing-masing GI), DE dari GI lokal, DE dari GI remote — semua dengan persen. DE Quality dan Status DE tidak lagi di Key Results (ada di Status Diagnostik DE).
-- **Estimasi Penyebab Gangguan otomatis** (tanpa selectbox manual): `estimate_summary_disturbance_cause` menentukan penyebab dari fault type + indikasi HR, menampilkan tabel dasar penentuan (Parameter|Nilai: fault type, Rf, confidence, arus/tegangan fasa terganggu fault-vs-prefault, IE), penjelasan, catatan, dan referensi literatur. Singkatan diberi kepanjangan (SLG, CB, SOE, SOTF, dll).
+- **Estimasi Penyebab Gangguan otomatis** (tanpa selectbox manual): `estimate_summary_disturbance_cause` memakai **candidate-scoring multi-fitur berbasis literatur**:
+  - **Komponen simetris** — rasio I2/I1, I0/I1, I0/I2 (tanda sekuens per tipe, SEL), plus sudut sekuens (∠I2−∠I1, ∠I0−∠I1), rasio tegangan (V2/V1, V0/V1), dan impedansi sekuens (Z0/Z1/Z2).
+  - **Resistansi gangguan (Rf)** — rendah → flashover/petir/satwa; tinggi → vegetasi.
+  - **Waktu kejadian** — hour-of-day (fitur diskriminatif #1 per Minnaar 2014; puncak diurnal bird streamer ~06:00 & ~22:00) dan bulan/musim (kemarau Indonesia → kebakaran lahan).
+  - **Cuaca lokasi** (OpenWeather) — badai petir → petir; hujan/kabut/RH tinggi → polusi; cerah-kering → kebakaran. *Caveat: cuaca SAAT INI, bukan saat kejadian* (lag 1 rerun; valid untuk gangguan baru).
+  - **Tanda waveform** (`waveform_signatures.py` dari raw COMTRADE) — transien/HF tajam (`di_dt_norm`, `hf_ratio`) → petir; durasi + clear/reclose → temporer (petir/satwa) vs permanen (vegetasi/isolator).
+  - Kandidat: Sambaran Petir, Vegetasi/Pohon, Satwa Liar (Bird Streamer), Flashover Polusi/Isolator, Kebakaran di Bawah Saluran; 3-fasa simetris → Power Swing.
+  - Output: tabel **fakta terukur** + tabel **kandidat ter-ranking** (skor + bukti) — keduanya dalam **expander** (tertutup default), tabel HTML print-friendly (`build_cause_table_html`); plus penjelasan, catatan validasi, referensi. Ambang `decisive` (skor top ≥3 & selisih ≥1) → label tegas; jika tidak → "Indikasi Awal (perlu validasi lapangan)". Konteks **Indonesia/tropis**. Referensi penyebab di `literature/fault_type/` (`.md`).
+- **Dataset Penyebab (jembatan rule → ML)**: panel expander merekam **feature-vector** kasus (42 kolom: komponen simetris, Rf, jam/bulan, cuaca, tanda waveform, jarak SE/DE, prediksi rule) + **penyebab terkonfirmasi** (label user pasca-inspeksi) ke sheet `fault_cause` pada Database Spreadsheet (sama dengan distance_settings/tower; Sheets API + service account; spreadsheet di-share Editor ke email service account), fallback unduh CSV. ML belum dibangun — menunggu dataset berlabel terkumpul (`fault_cause_dataset.py`).
 - Grafik SE/DE: memakai hasil paling update dari session; scoring SE via status `VALID/CHECK/UNCERTAIN` + warning count; scoring DE via `quality_score`; line length mengikuti `effective_line_param`. Label draggable + both-GI + marker filled (lihat Double-End).
 - Tower Map Summary: default DE jika tersedia, fallback SE; fokus ke dua tower pengapit; Map Settings default tertutup; tabel -5/+5 tower default terbuka saat focus fault.
 - Weather Summary: tampil setelah Tower Map punya data tower dan sumber fault.
@@ -329,7 +337,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - `case_state.json`: snapshot `st.session_state` yang JSON-safe (DataFrame → records+columns, complex → real/imag, numpy → tipe JSON; bytes rekaman tidak masuk JSON).
 - Restore: dari sidebar sebelum validasi local COMTRADE; file dari ZIP dibungkus sebagai upload virtual dengan `.name` dan `.getvalue()`. Restore memakai MD5 hash untuk mencegah restore loop berulang.
 - Export: tombol `Export Case ZIP` di `Setup DB > Case Storage`. Nama file digenerate otomatis: `porlungcase_{line_name}_{YYYYMMDD}_{HHMMSS}.zip`.
-- Google Drive upload tidak tersedia di UI (fitur backend tersedia tapi tidak diekspos untuk menjaga stabilitas).
+- **Simpan/Muat Case via Spreadsheet** (`cloud_cases.py`, di Setup DB > Case Storage): ZIP case → base64 **chunked** ke sheet `saved_cases_data` (1 baris/case, payload dipecah ≤49000 char/sel), indeks ringkas ke sheet `saved_cases` (upsert by `case_id = sha1(line_name|fault_time_cfg)`). Daftar case dimuat **diurut `saved_at` terbaru**; pilih → rakit chunk → `restore_case_archive`. **Loader tersedia di sidebar "Case Storage"** (muncul begitu credentials/Database URL ada) sehingga user bisa memilih case tersimpan **di landing page tanpa upload COMTRADE/ZIP**; juga ada di Setup DB > Case Storage (untuk save). **TANPA Google Drive** — service account akun personal tidak punya kuota Drive (`storageQuotaExceeded`), jadi payload disimpan langsung di spreadsheet. **Melengkapi** (tidak menggantikan) save/load ZIP manual.
 - **Yang disimpan ke case ZIP:** semua session state kecuali key sensitif. `CASE_SETTINGS_KEYS` menjamin kunci berikut selalu disimpan: DB URLs, sheet names, signal assignment (channel selections + CT/VT + recorded side), line param, OpenWeather API key.
 - **Yang tidak disimpan:** runtime credentials file, service account, xweather/accuweather key, bytes file upload sementara.
 
@@ -339,7 +347,8 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Hanya dibaca ke memory/session; tidak ditulis ke disk, tidak dicetak, tidak diekspor.
 - Dapat mengisi otomatis: Database Spreadsheet URL, Line/Cable/Distance sheet names, Tower Schedule URL + sheet, OpenWeather API key, Google service account opsional.
 - Tombol `Clear Runtime Credentials from Session` (di Setup DB) tersedia.
-- `.gitignore` harus mengecualikan `.streamlit/secrets.toml`, `credentials*.toml`, `credentials*.json`.
+- `.gitignore` harus mengecualikan `.streamlit/secrets.toml`, folder `credentials/` (beserta isinya), dan `*credentials*.toml`/`*credentials*.json` (prefix apa pun, mis. `porlung_credentials.toml`).
+- **Auto-load credentials lokal:** saat startup, bila belum ada credentials dimuat, aplikasi membaca `credentials/porlung_credentials.toml` (atau `credentials/credentials.toml`/`.json`), parse + apply otomatis. File ini **tidak pernah** di-commit (gitignored).
 
 ### Prioritas Konfigurasi
 

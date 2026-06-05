@@ -4,6 +4,7 @@ import cmath
 import re
 import textwrap
 import hashlib
+from datetime import datetime
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -71,6 +72,7 @@ from app_helpers import (
     downsample_dataframe_for_plot,
     make_streamlit_safe_columns,
     invert_current_phasors,
+    plotly_image_filename,
 )
 from waveform_helpers import (
     build_waveform_rms_summary,
@@ -134,6 +136,20 @@ from summary_helpers import (
     estimate_summary_disturbance_cause,
     single_ended_plot_score,
     build_summary_location_plot,
+    build_cause_table_html,
+)
+from waveform_signatures import compute_waveform_signatures
+from fault_cause_dataset import (
+    CONFIRMED_CAUSE_LABELS,
+    DATASET_COLUMNS,
+    build_fault_cause_feature_row,
+    append_feature_row_to_gsheet,
+)
+from cloud_cases import (
+    SAVED_CASES_SHEET,
+    save_case_to_cloud,
+    list_saved_cases,
+    load_case_from_cloud,
 )
 
 
@@ -372,6 +388,16 @@ def render_fault_weather_lightning_summary(tower_df: pd.DataFrame, key_prefix: s
         else translate_weather_description(current.get("weather", "-"))
     )
 
+    # Simpan konteks cuaca ringkas untuk Estimasi Penyebab Gangguan
+    # (dibaca di rerun berikutnya — caveat: cuaca SAAT INI di lokasi, bukan saat kejadian)
+    if not current.get("error"):
+        st.session_state["summary_weather_context"] = {
+            "code": current.get("weather_code"),
+            "desc": current_summary,
+            "rain_mm": current.get("rain_mm"),
+            "humidity": current.get("humidity_pct"),
+        }
+
     fault_segment = get_fault_tower_segment(map_df, selected_fault_option["distance_km"])
     if fault_segment:
         fault_label = (
@@ -594,6 +620,56 @@ with st.sidebar.expander("Upload Remote End COMTRADE", expanded=(_remote_has_cfg
     remote_cfg_file = st.file_uploader("Remote .cfg", key="remote_cfg_file")
     remote_dat_file = st.file_uploader("Remote .dat", key="remote_dat_file")
 
+# Auto-load credentials lokal dari folder `credentials/` (gitignored, tidak di-commit)
+# bila belum ada credentials yang dimuat. Mempermudah autentikasi service account
+# (mis. untuk menulis dataset ke sheet fault_cause) tanpa upload manual tiap sesi.
+if not st.session_state.get("runtime_credentials_loaded_name"):
+    import os as _os
+
+    class _LocalCredFile:
+        def __init__(self, path):
+            self.name = _os.path.basename(path)
+            with open(path, "rb") as _fh:
+                self._data = _fh.read()
+
+        def getvalue(self):
+            return self._data
+
+    for _cred_path in (
+        "credentials/porlung_credentials.toml",
+        "credentials/credentials.toml",
+        "credentials/credentials.json",
+    ):
+        if _os.path.exists(_cred_path):
+            try:
+                _local_payload, _local_err = parse_runtime_credentials_upload(_LocalCredFile(_cred_path))
+                if not _local_err and isinstance(_local_payload, dict):
+                    st.session_state["runtime_credentials"] = _local_payload
+                    st.session_state["runtime_credentials_loaded_name"] = _os.path.basename(_cred_path)
+                    apply_runtime_credentials(_local_payload)
+            except Exception:
+                pass
+            break
+
+# Auto-load service account dari file JSON di folder credentials/ (key dari Google Cloud).
+# Memungkinkan menulis dataset ke Google Sheet tanpa menempelkan private_key ke TOML.
+if not st.session_state.get("runtime_gdrive_service_account"):
+    import os as _os2
+    import glob as _glob
+    import json as _json2
+
+    for _sa_path in sorted(_glob.glob("credentials/*.json")):
+        try:
+            with open(_sa_path, "r", encoding="utf-8-sig") as _saf:
+                _sa = _json2.load(_saf)
+            if isinstance(_sa, dict) and _sa.get("type") == "service_account" and _sa.get("private_key"):
+                st.session_state["runtime_gdrive_service_account"] = _sa
+                if not st.session_state.get("runtime_credentials_loaded_name"):
+                    st.session_state["runtime_credentials_loaded_name"] = _os2.path.basename(_sa_path)
+                break
+        except Exception:
+            pass
+
 _creds_db_url = (
     str(st.session_state.get("database_spreadsheet_url", "") or "").strip()
     or str(get_config_secret("DATABASE_SPREADSHEET_URL", "") or "").strip()
@@ -791,6 +867,43 @@ st.sidebar.divider()
 _case_loaded = bool(st.session_state.get("_restored_case_hash"))
 with st.sidebar.expander("Case Storage", expanded=False):
     case_archive_file = st.file_uploader("Load Case (.zip)", type=["zip"], key="case_archive_file")
+
+    # Muat case tersimpan dari spreadsheet (tanpa upload COMTRADE/ZIP) — butuh credentials
+    _sb_cloud_url = st.session_state.get("database_spreadsheet_url", "")
+    if _sb_cloud_url:
+        _sb_cloud_sheet = st.session_state.get("saved_cases_sheet_name") or SAVED_CASES_SHEET
+        st.caption("Atau muat case tersimpan dari spreadsheet:")
+        _sb_cache_key = f"{_sb_cloud_url}|{_sb_cloud_sheet}"
+        if st.session_state.get("_saved_cases_cache_key") != _sb_cache_key or "_saved_cases_cache" not in st.session_state:
+            st.session_state["_saved_cases_cache"] = list_saved_cases(_sb_cloud_url, _sb_cloud_sheet)
+            st.session_state["_saved_cases_cache_key"] = _sb_cache_key
+        _sb_cloud_cases = st.session_state["_saved_cases_cache"]
+        if not _sb_cloud_cases:
+            st.caption("Belum ada case tersimpan.")
+            if st.button("↻ Muat Ulang Daftar", key="reload_sidebar_saved_cases", use_container_width=True):
+                st.session_state.pop("_saved_cases_cache", None)
+                st.rerun()
+        else:
+            _sb_cloud_opts = {
+                f"{c.get('case_name') or '-'}  |  {c.get('saved_at') or '-'}": c for c in _sb_cloud_cases
+            }
+            _sb_cloud_sel = st.selectbox(
+                "Pilih case (terbaru di atas)", list(_sb_cloud_opts.keys()), key="sidebar_saved_case_select"
+            )
+            _sb_b1, _sb_b2 = st.columns([3, 1])
+            with _sb_b1:
+                _sb_do_load = st.button("Muat Case Terpilih", key="sidebar_load_case_cloud_btn", use_container_width=True)
+            with _sb_b2:
+                if st.button("↻", key="reload_sidebar_saved_cases", help="Muat ulang daftar", use_container_width=True):
+                    st.session_state.pop("_saved_cases_cache", None)
+                    st.rerun()
+            if _sb_do_load:
+                _sb_ok, _sb_msg = load_case_from_cloud(_sb_cloud_url, str(_sb_cloud_opts[_sb_cloud_sel].get("case_id", "")))
+                if _sb_ok:
+                    st.session_state["case_restore_message"] = _sb_msg
+                    st.rerun()
+                else:
+                    st.sidebar.error(_sb_msg)
 if case_archive_file is not None:
     import hashlib as _hashlib
     _archive_bytes = case_archive_file.getvalue()
@@ -1926,6 +2039,57 @@ with tab0:
             use_container_width=True,
         )
 
+    # ── Simpan / Muat Case via Spreadsheet (sheet saved_cases) ─────────
+    st.markdown("#### Simpan / Muat Case via Spreadsheet")
+    st.caption(
+        "Simpan case langsung ke spreadsheet (payload di `saved_cases_data`, indeks di "
+        "`saved_cases`), lalu muat kembali dari daftar (terbaru di atas) tanpa menangani file "
+        "ZIP manual. Tanpa Google Drive — cocok untuk service account akun personal."
+    )
+    _cloud_url = st.session_state.get("database_spreadsheet_url", "")
+    _cloud_sheet = st.session_state.get("saved_cases_sheet_name") or SAVED_CASES_SHEET
+    if not _cloud_url:
+        st.caption("Isi Database Spreadsheet URL untuk mengaktifkan simpan/muat cloud.")
+    elif "line_param" not in st.session_state:
+        st.caption("Belum ada case untuk disimpan — selesaikan analisis terlebih dahulu.")
+    else:
+        _ccol1, _ccol2 = st.columns(2)
+        with _ccol1:
+            if st.button("Simpan Case ke Cloud", key="save_case_cloud_btn", use_container_width=True):
+                _sc_ok, _sc_msg = save_case_to_cloud(_cloud_url, _auto_case_name, _cloud_sheet)
+                (st.success if _sc_ok else st.error)(_sc_msg)
+                if _sc_ok:
+                    st.session_state.pop("_saved_cases_cache", None)
+        with _ccol2:
+            if st.button("↻ Muat Ulang Daftar", key="reload_saved_cases_btn", use_container_width=True):
+                st.session_state.pop("_saved_cases_cache", None)
+
+        _sc_key = f"{_cloud_url}|{_cloud_sheet}"
+        if st.session_state.get("_saved_cases_cache_key") != _sc_key or "_saved_cases_cache" not in st.session_state:
+            st.session_state["_saved_cases_cache"] = list_saved_cases(_cloud_url, _cloud_sheet)
+            st.session_state["_saved_cases_cache_key"] = _sc_key
+        _cloud_cases = st.session_state["_saved_cases_cache"]
+
+        if not _cloud_cases:
+            st.caption("Belum ada case tersimpan di cloud (sheet `saved_cases` kosong).")
+        else:
+            _opts = {
+                f"{c.get('case_name') or '-'}  |  {c.get('line_name') or '-'}  |  {c.get('saved_at') or '-'}": c
+                for c in _cloud_cases
+            }
+            _sel_label = st.selectbox(
+                "Pilih case untuk dimuat (terbaru di atas)",
+                list(_opts.keys()),
+                key="saved_case_select",
+            )
+            if st.button("Muat Case Terpilih", key="load_case_cloud_btn", use_container_width=True):
+                _lc_ok, _lc_msg = load_case_from_cloud(_cloud_url, str(_opts[_sel_label].get("case_id", "")))
+                if _lc_ok:
+                    st.success(_lc_msg)
+                    st.rerun()
+                else:
+                    st.error(_lc_msg)
+
 
 with tab_tower:
     st.subheader("Tower Schedule")
@@ -2443,17 +2607,50 @@ with summary_container:
     _remote_gi = st.session_state.get("two_ended_remote_gi_label", "GI Remote")
     _line_len  = float((st.session_state.get("effective_line_param") or st.session_state.get("line_param") or {}).get("length_km") or 0.0)
 
+    # Waktu kejadian (hour/month) dari CFG — fitur diskriminatif penyebab gangguan
+    _summary_fault_dt = (
+        get_summary_fault_event_time("cfg_trigger_time")
+        or get_summary_fault_event_time("cfg_start_time")
+    )
+    _summary_fault_hour = _summary_fault_dt.hour if _summary_fault_dt is not None else None
+    _summary_fault_month = _summary_fault_dt.month if _summary_fault_dt is not None else None
+
+    # Tanda waveform (transien/HF, durasi, reclose) untuk Estimasi Penyebab — cache per fault
+    _wf_df = st.session_state.get("assigned_df")
+    _wf_fw = st.session_state.get("fault_window")
+    _wf_det = st.session_state.get("fault_detection") or {}
+    _wf_spc = _wf_det.get("samples_per_cycle") or st.session_state.get("local_samples_per_cycle")
+    _wf_freq = float((st.session_state.get("local_metadata") or {}).get("frequency") or 50.0)
+    if _wf_df is not None and _wf_fw is not None and _wf_spc:
+        _wf_key = (int(_wf_fw.get("fault_index", -1)), int(_wf_spc), len(_wf_df))
+        if st.session_state.get("_wf_sig_key") != _wf_key:
+            try:
+                st.session_state["summary_waveform_signatures"] = compute_waveform_signatures(
+                    _wf_df, _wf_fw, int(_wf_spc), _wf_freq
+                )
+            except Exception:
+                st.session_state["summary_waveform_signatures"] = {}
+            st.session_state["_wf_sig_key"] = _wf_key
+
     # Baris 1 — Fault Type dan Prediksi Penyebab (ringkas)
     _estimated_cause, _ = estimate_summary_disturbance_cause(
         fault_type_summary,
         st.session_state.get("high_resistance_result"),
+        fault_hour=_summary_fault_hour,
+        fault_month=_summary_fault_month,
+        weather_context=st.session_state.get("summary_weather_context"),
+        waveform_signatures=st.session_state.get("summary_waveform_signatures"),
     )
     # Ambil bagian sebelum tanda kurung untuk tampilan singkat
     _cause_short = (_estimated_cause or "-").split("(")[0].strip()
 
-    kr1, kr2 = st.columns([1, 3])
-    kr1.metric("Fault Type", fault_type_summary.get("fault_type", "-"))
-    kr2.metric("Prediksi Penyebab", _cause_short)
+    kr1, kr2, kr3 = st.columns([1, 1, 2])
+    kr1.metric(f"Fault Type {_local_gi}", fault_type_summary.get("fault_type", "-"))
+    kr2.metric(
+        f"Fault Type {_remote_gi}",
+        remote_fault_type_summary.get("fault_type", "-") if remote_fault_type_summary else "-",
+    )
+    kr3.metric("Prediksi Penyebab", _cause_short)
 
     # Baris 2 — SE lokal, SE remote, DE dari lokal, DE dari remote
     _se_local_km  = f'{single_summary["recommended_distance_km"]:.3f} km' if single_summary else "-"
@@ -2640,25 +2837,39 @@ with summary_container:
         two_result=st.session_state.get("two_ended_result"),
         two_quality=st.session_state.get("two_ended_quality"),
         line_param=st.session_state.get("effective_line_param") or st.session_state.get("line_param"),
+        fault_hour=_summary_fault_hour,
+        fault_month=_summary_fault_month,
+        weather_context=st.session_state.get("summary_weather_context"),
+        waveform_signatures=st.session_state.get("summary_waveform_signatures"),
     )
     st.metric("Penyebab Gangguan", estimated_cause)
 
     _basis = estimated_cause_detail.get("basis", [])
+    _candidates = estimated_cause_detail.get("candidates", [])
     _explanation = estimated_cause_detail.get("explanation", "")
     _references = estimated_cause_detail.get("references", "")
     _note = estimated_cause_detail.get("note", "")
 
     if _basis:
-        st.markdown("**Dasar penentuan:**")
-        st.dataframe(
-            pd.DataFrame(_basis),
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Parameter": st.column_config.TextColumn("Parameter", width="medium"),
-                "Nilai": st.column_config.TextColumn("Nilai", width="large"),
-            },
-        )
+        with st.expander("Fakta Terukur dari Rekaman", expanded=False):
+            st.html(build_cause_table_html(
+                _basis,
+                [
+                    {"key": "Parameter", "header": "Parameter", "width": "34%"},
+                    {"key": "Nilai", "header": "Nilai", "width": "66%"},
+                ],
+            ))
+
+    if _candidates:
+        with st.expander("Kandidat Penyebab (Ter-ranking)", expanded=False):
+            st.html(build_cause_table_html(
+                _candidates,
+                [
+                    {"key": "Penyebab", "header": "Penyebab", "width": "26%", "align": "center"},
+                    {"key": "Skor", "header": "Skor", "width": "7%", "align": "center"},
+                    {"key": "Bukti", "header": "Bukti", "width": "67%"},
+                ],
+            ))
 
     if _explanation:
         st.markdown(_explanation)
@@ -2668,6 +2879,63 @@ with summary_container:
 
     if _references:
         st.caption(f"*Referensi: {_references}*")
+
+    # ── Pengumpulan dataset berlabel (jembatan rule → ML) ──────────────
+    with st.expander("Dataset Penyebab (untuk Pelatihan ML)", expanded=False):
+        _ds_sheet_name = st.session_state.get("fault_cause_sheet_name") or "fault_cause"
+        st.caption(
+            f"Rekam feature-vector kasus ini + penyebab terkonfirmasi (setelah inspeksi lapangan) "
+            f"ke sheet `{_ds_sheet_name}` pada Database Spreadsheet. Dataset berlabel ini menjadi bahan "
+            "pelatihan model ML penentuan penyebab di masa depan."
+        )
+        _ds_line = (st.session_state.get("effective_line_param") or st.session_state.get("line_param") or {})
+        _ds_confirmed = st.selectbox(
+            "Penyebab Terkonfirmasi (hasil inspeksi)",
+            CONFIRMED_CAUSE_LABELS,
+            index=len(CONFIRMED_CAUSE_LABELS) - 1,  # default "Belum Diketahui"
+            key="dataset_confirmed_cause",
+        )
+        _ds_row = build_fault_cause_feature_row(
+            timestamp_analyzed=datetime.now().isoformat(timespec="seconds"),
+            fault_time_cfg=_summary_fault_dt.isoformat(timespec="seconds") if _summary_fault_dt else "",
+            line_name=_ds_line.get("line_name", ""),
+            gi_local=_local_gi, gi_remote=_remote_gi,
+            fault_type_result=fault_type_summary,
+            high_resistance_result=st.session_state.get("high_resistance_result"),
+            phasors=st.session_state.get("phasors"),
+            fault_hour=_summary_fault_hour, fault_month=_summary_fault_month,
+            weather_context=st.session_state.get("summary_weather_context"),
+            waveform_signatures=st.session_state.get("summary_waveform_signatures"),
+            single_result=st.session_state.get("single_ended_result"),
+            two_result=st.session_state.get("two_ended_result"),
+            two_quality=st.session_state.get("two_ended_quality"),
+            predicted_cause=estimated_cause,
+            predicted_score=(estimated_cause_detail.get("candidates") or [{}])[0].get("Skor"),
+            confirmed_cause=_ds_confirmed,
+        )
+        with st.expander("Lihat feature-vector kasus ini", expanded=False):
+            st.dataframe(
+                pd.DataFrame([{"Fitur": k, "Nilai": v} for k, v in _ds_row.items()]),
+                hide_index=True, use_container_width=True,
+            )
+        _ds_col1, _ds_col2 = st.columns(2)
+        with _ds_col1:
+            if st.button("Tambah ke Google Sheet", key="dataset_append_btn", use_container_width=True):
+                _ds_url = st.session_state.get("database_spreadsheet_url", "")
+                if not _ds_url:
+                    st.error("Database Spreadsheet URL belum diisi di Setup DB.")
+                else:
+                    _ok, _msg = append_feature_row_to_gsheet(_ds_url, _ds_row, sheet_name=_ds_sheet_name)
+                    (st.success if _ok else st.error)(_msg)
+        with _ds_col2:
+            _ds_csv = ",".join(DATASET_COLUMNS) + "\n" + ",".join(
+                '"' + str(_ds_row.get(c, "")).replace('"', '""') + '"' for c in DATASET_COLUMNS
+            )
+            st.download_button(
+                "Unduh Baris (CSV)", data=_ds_csv,
+                file_name=f"fault_cause_row_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv", use_container_width=True, key="dataset_csv_btn",
+            )
 
     st.markdown("### Grafik SE dan DE")
     _sloc_key = (
@@ -2701,6 +2969,11 @@ with summary_container:
                     "shapePosition": False,
                     "colorbarPosition": False,
                     "colorbarTitleText": False,
+                },
+                "toImageButtonOptions": {
+                    "filename": plotly_image_filename(
+                        (st.session_state.get("line_param") or {}).get("line_name")
+                    )
                 },
             },
         )

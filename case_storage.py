@@ -66,6 +66,16 @@ CASE_STATE_EXCLUDE_KEYS = {
 _WIDGET_RESTORE_CLEANUP_KEYS = frozenset({
     "sidebar_credentials_upload",
     "runtime_credentials_upload",
+    # Tombol dataset penyebab — nilai tombol tidak boleh di-set via session_state
+    "dataset_append_btn",
+    "dataset_csv_btn",
+    # Tombol simpan/muat case via cloud
+    "save_case_cloud_btn",
+    "load_case_cloud_btn",
+    "sidebar_load_case_cloud_btn",
+    # Selectbox daftar saved case — value lama bisa tak ada di opsi baru saat restore
+    "saved_case_select",
+    "sidebar_saved_case_select",
 })
 # Prefix widget keys yang tidak boleh di-restore (button, download_button, dll.)
 # Semua prefix ini aman karena tidak ada state key yang valid diawali nama-nama ini.
@@ -358,6 +368,11 @@ def make_case_json_safe(value):
         pass
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
+    # Objek figure (Plotly/Matplotlib) TIDAK disimpan — bukan JSON-safe, membengkakkan
+    # payload (ribuan titik), dan derivatif yang dihitung ulang dari state saat restore.
+    _mod = (getattr(type(value), "__module__", "") or "").split(".", 1)[0]
+    if _mod in ("plotly", "matplotlib"):
+        return None
     return str(value)
 
 
