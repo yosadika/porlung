@@ -92,7 +92,7 @@ def render():
         )
     with st.expander("Remote Fault Cursor", expanded=False):
         if "remote_assigned_df" not in st.session_state:
-            st.info("Selesaikan Remote End > Signals terlebih dahulu untuk mengatur fault cursor remote.")
+            st.info("Selesaikan Signal Assignment di tab Remote End untuk mengatur fault cursor remote.")
         else:
             render_fault_cursor(
                 end="remote",
@@ -174,7 +174,7 @@ def render():
     ):
         remote_phasors_for_plot = st.session_state["two_ended_adapted_remote_phasors"]
     elif remote_phasor_plot_source == "Adapted remote for DE":
-        st.caption("Adapted remote belum tersedia. Jalankan Calculate Two-Ended Fault Location terlebih dahulu.")
+        st.caption("Klik Calculate Two-Ended Fault Location untuk melihat hasil adaptasi remote.")
 
     col_phasor_local, col_phasor_remote = st.columns(2)
     with col_phasor_local:
@@ -1758,7 +1758,7 @@ def render():
             if st.button("Calculate Optional TWS / Time-Based Location", key="calculate_optional_tws"):
                 if local_tws_fault_window is None or remote_tws_fault_window is None:
                     st.session_state.pop("time_based_fault_location_result", None)
-                    st.warning("Fault window local/remote belum lengkap. Jalankan deteksi fault local dan remote dahulu.")
+                    st.warning("Selesaikan deteksi fault di tab Local End dan Remote End terlebih dahulu.")
                 else:
                     local_tws_time = get_absolute_event_time(
                         local_metadata,

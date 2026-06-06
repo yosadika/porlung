@@ -616,7 +616,7 @@ _remote_has_cfg = bool(st.session_state.get("remote_cfg_file") is not None or st
 _remote_has_dat = bool(st.session_state.get("remote_dat_file") is not None or st.session_state.get("case_remote_dat_bytes"))
 _remote_complete = _remote_has_cfg and _remote_has_dat
 with st.sidebar.expander("Upload Remote End COMTRADE", expanded=(_remote_has_cfg or _remote_has_dat) and not _remote_complete):
-    st.caption("Opsional. Diisi jika ingin menghitung double-ended.")
+    st.caption("Untuk analisis Double-End (opsional).")
     remote_cfg_file = st.file_uploader("Remote .cfg", key="remote_cfg_file")
     remote_dat_file = st.file_uploader("Remote .dat", key="remote_dat_file")
 
@@ -904,16 +904,16 @@ if cfg_file is None or dat_file is None:
         col_empty_sum2.metric("Remote Record", remote_upload_status)
         col_empty_sum3.metric("Calculation", "Pending")
         if cfg_file is not None and dat_file is None:
-            st.warning("File local CFG sudah diupload, tetapi file local DAT belum tersedia.")
+            st.warning("File .cfg sudah diunggah — lengkapi dengan file .dat untuk memulai analisis.")
         elif cfg_file is None and dat_file is not None:
-            st.warning("File local DAT sudah diupload, tetapi file local CFG belum tersedia.")
+            st.warning("File .dat sudah diunggah — lengkapi dengan file .cfg untuk memulai analisis.")
         elif remote_cfg_file is not None or remote_dat_file is not None:
             st.info(
-                "Rekaman remote sudah terdeteksi. Upload pasangan file local jika ingin menjalankan workflow "
-                "fault locator utama."
+                "Rekaman remote terdeteksi. Unggah pasangan file COMTRADE local (.cfg + .dat) "
+                "untuk memulai analisis fault locator."
             )
         else:
-            st.info("Upload pasangan file COMTRADE local .cfg dan .dat untuk mulai menghitung fault locator.")
+            st.info("Unggah pasangan file COMTRADE local (.cfg + .dat) untuk memulai analisis.")
         st.markdown("### Yang akan tampil setelah data tersedia")
         st.write(
             "Tabel pre-fault/fault GI local dan GI remote, waveform fokus fault, "
@@ -933,7 +933,7 @@ if cfg_file is None or dat_file is None:
                 st.session_state["_saved_cases_cache_key"] = _lp_cache_key
             _lp_cloud_cases = st.session_state["_saved_cases_cache"]
             if not _lp_cloud_cases:
-                st.caption("Belum ada case tersimpan di spreadsheet.")
+                st.caption("Belum ada case tersimpan.")
                 if st.button("↻ Muat Ulang Daftar", key="reload_landing_saved_cases", use_container_width=False):
                     st.session_state.pop("_saved_cases_cache", None)
                     st.rerun()
@@ -942,7 +942,7 @@ if cfg_file is None or dat_file is None:
                     f"{c.get('case_name') or '-'}  |  {c.get('saved_at') or '-'}": c for c in _lp_cloud_cases
                 }
                 _lp_cloud_sel = st.selectbox(
-                    "Pilih case (terbaru di atas)", list(_lp_cloud_opts.keys()), key="landing_saved_case_select"
+                    "Case Tersimpan", list(_lp_cloud_opts.keys()), key="landing_saved_case_select"
                 )
                 _lp_b1, _lp_b2 = st.columns([4, 1])
                 with _lp_b1:
@@ -2012,8 +2012,8 @@ with tab0:
 
     st.markdown("### Case Storage")
     st.caption(
-        "Simpan rekaman COMTRADE, parameter yang sudah diubah, dan hasil kalkulasi sebagai satu arsip case. "
-        "Arsip ini bisa di-load kembali dari sidebar tanpa mengatur ulang workflow dari awal."
+        "Simpan rekaman, parameter, dan hasil kalkulasi sebagai satu arsip case. "
+        "Arsip dapat dimuat kembali kapan saja tanpa perlu mengatur ulang workflow dari awal."
     )
 
     _line_name = st.session_state.get("line_param", {}).get("line_name", "") or "case"
@@ -2044,16 +2044,14 @@ with tab0:
     # ── Simpan / Muat Case via Spreadsheet (sheet saved_cases) ─────────
     st.markdown("#### Simpan / Muat Case via Spreadsheet")
     st.caption(
-        "Simpan case langsung ke spreadsheet (payload di `saved_cases_data`, indeks di "
-        "`saved_cases`), lalu muat kembali dari daftar (terbaru di atas) tanpa menangani file "
-        "ZIP manual. Tanpa Google Drive — cocok untuk service account akun personal."
+        "Simpan case langsung ke spreadsheet dan muat kembali dari daftar tanpa perlu mengelola file ZIP secara manual."
     )
     _cloud_url = st.session_state.get("database_spreadsheet_url", "")
     _cloud_sheet = st.session_state.get("saved_cases_sheet_name") or SAVED_CASES_SHEET
     if not _cloud_url:
-        st.caption("Isi Database Spreadsheet URL untuk mengaktifkan simpan/muat cloud.")
+        st.caption("Isi Database Spreadsheet URL di atas untuk mengaktifkan fitur ini.")
     elif "line_param" not in st.session_state:
-        st.caption("Belum ada case untuk disimpan — selesaikan analisis terlebih dahulu.")
+        st.caption("Muat rekaman COMTRADE dan jalankan Line Parameter untuk mengaktifkan simpan case.")
     else:
         _ccol1, _ccol2 = st.columns(2)
         with _ccol1:
@@ -2073,14 +2071,14 @@ with tab0:
         _cloud_cases = st.session_state["_saved_cases_cache"]
 
         if not _cloud_cases:
-            st.caption("Belum ada case tersimpan di cloud (sheet `saved_cases` kosong).")
+            st.caption("Belum ada case tersimpan.")
         else:
             _opts = {
                 f"{c.get('case_name') or '-'}  |  {c.get('line_name') or '-'}  |  {c.get('saved_at') or '-'}": c
                 for c in _cloud_cases
             }
             _sel_label = st.selectbox(
-                "Pilih case untuk dimuat (terbaru di atas)",
+                "Case Tersimpan",
                 list(_opts.keys()),
                 key="saved_case_select",
             )
@@ -2729,7 +2727,7 @@ with summary_container:
             use_container_width=True,
         )
     else:
-        st.info("Tabel pre-fault/fault GI lokal belum tersedia. Jalankan Fault Cursor dan Phasor lokal dahulu.")
+        st.info("Selesaikan Fault Cursor dan Phasor di tab Local End untuk melihat tabel ini.")
 
     remote_comparison_df = build_prefault_fault_comparison_dataframe(
         st.session_state.get("remote_phasors"),
@@ -2752,7 +2750,7 @@ with summary_container:
             use_container_width=True,
         )
     else:
-        st.info("Tabel pre-fault/fault GI remote belum tersedia. Jalankan Double-End sampai remote phasor terbaca.")
+        st.info("Selesaikan analisis di tab Remote End untuk melihat tabel ini.")
 
     st.markdown("### Waveform Fokus Fault Detection")
     summary_fault_type, summary_voltage_channel, summary_current_channel = choose_summary_fault_signals(
@@ -3093,7 +3091,7 @@ with tab3:
     st.subheader("Waveform Hasil Signal Assignment")
 
     if "assigned_df" not in st.session_state:
-        st.warning("Silakan lakukan Signal Assignment terlebih dahulu.")
+        st.warning("Selesaikan Signal Assignment di tab Local End terlebih dahulu.")
         st.stop()
 
     assigned_df = st.session_state["assigned_df"]
@@ -3186,11 +3184,11 @@ with tab5:
     st.subheader("Phasor Calculation")
 
     if "assigned_df" not in st.session_state:
-        st.warning("Silakan lakukan Signal Assignment terlebih dahulu.")
+        st.warning("Selesaikan Signal Assignment di tab Local End terlebih dahulu.")
         st.stop()
 
     if "fault_window" not in st.session_state:
-        st.warning("Silakan lakukan Fault Detection & Cursor terlebih dahulu.")
+        st.warning("Selesaikan Fault Detection & Cursor di tab Local End terlebih dahulu.")
         st.stop()
 
     assigned_df = st.session_state["assigned_df"]
@@ -3405,7 +3403,7 @@ with tab6:
     st.subheader("Fault Type Detection")
 
     if "phasors" not in st.session_state:
-        st.warning("Silakan lakukan Phasor Calculation terlebih dahulu.")
+        st.warning("Selesaikan Phasor Calculation di tab Local End terlebih dahulu.")
         st.stop()
 
     phasors = st.session_state["phasors"]
@@ -3633,7 +3631,7 @@ with tab7:
 
 def resolve_end_analysis_context(end_side: str, feature_label: str):
     if "line_param" not in st.session_state:
-        st.warning("Silakan lakukan Line Parameter terlebih dahulu.")
+        st.warning("Selesaikan Line Parameter di tab Line terlebih dahulu.")
         return None
 
     line_param = st.session_state.get("effective_line_param") or st.session_state["line_param"]

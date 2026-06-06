@@ -369,7 +369,7 @@ def _render_local_fault_cursor(
         )
 
     if assigned_df_key not in st.session_state:
-        st.warning("Silakan lakukan Signal Assignment terlebih dahulu.")
+        st.warning("Selesaikan Signal Assignment di tab Local End terlebih dahulu.")
         return
 
     assigned_df = st.session_state[assigned_df_key]
