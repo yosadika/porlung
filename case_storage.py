@@ -72,6 +72,7 @@ _WIDGET_RESTORE_CLEANUP_KEYS = frozenset({
     # Tombol simpan/muat case via cloud
     "save_case_cloud_btn",
     "load_case_cloud_btn",
+    "sidebar_save_case_cloud_btn",
     "sidebar_load_case_cloud_btn",
     "landing_load_case_cloud_btn",
     # Selectbox daftar saved case — value lama bisa tak ada di opsi baru saat restore

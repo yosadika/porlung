@@ -169,11 +169,6 @@ def render():
             z0_imag_col = detected_columns.get("z0_imag")
             z0_abs_col = detected_columns.get("z0_abs")
             z0_angle_col = detected_columns.get("z0_angle")
-            ratio_gia_ct_col = detected_columns.get("ratio_gia_ct")
-            ratio_gia_vt_col = detected_columns.get("ratio_gia_vt")
-            ratio_gib_ct_col = detected_columns.get("ratio_gib_ct")
-            ratio_gib_vt_col = detected_columns.get("ratio_gib_vt")
-
             corrected_columns = {
                 "upt": None if use_cable_database else detected_columns.get("upt"),
                 "ultg": None if use_cable_database else detected_columns.get("ultg"),
@@ -191,12 +186,6 @@ def render():
                 "z0_imag": None if z0_imag_col == "None" else z0_imag_col,
                 "z0_abs": None if z0_abs_col == "None" else z0_abs_col,
                 "z0_angle": None if z0_angle_col == "None" else z0_angle_col,
-                "ratio_gia_ct": None if ratio_gia_ct_col == "None" else ratio_gia_ct_col,
-                "ratio_gia_vt": None if ratio_gia_vt_col == "None" else ratio_gia_vt_col,
-                "ratio_gib_ct": None if ratio_gib_ct_col == "None" else ratio_gib_ct_col,
-                "ratio_gib_vt": None if ratio_gib_vt_col == "None" else ratio_gib_vt_col,
-                "gia_name": None if use_cable_database else detected_columns.get("gia_name"),
-                "gib_name": None if use_cable_database else detected_columns.get("gib_name"),
                 "conductor_type": detected_columns.get("conductor_type"),
                 "circuit_count": detected_columns.get("circuit_count"),
             }
@@ -205,10 +194,6 @@ def render():
                 corrected_columns["line_name"] = None
                 corrected_columns["bay_pht"] = None
                 corrected_columns["length"] = None
-                corrected_columns["ratio_gia_ct"] = None
-                corrected_columns["ratio_gia_vt"] = None
-                corrected_columns["ratio_gib_ct"] = None
-                corrected_columns["ratio_gib_vt"] = None
 
             if not use_cable_database:
                 _f_ultg   = st.session_state.get("sidebar_filter_ultg", "")
@@ -337,8 +322,6 @@ def render():
                         "segment": excel_impedance_data.get("segment"),
                         "line_name": excel_impedance_data["line_name"],
                         "bay_pht": excel_impedance_data["bay_pht"],
-                        "gi_a": excel_impedance_data["gi_a"],
-                        "gi_b": excel_impedance_data["gi_b"],
                         "conductor_type": excel_impedance_data["conductor_type"],
                         "length": excel_impedance_data["length"],
                         "R1": excel_impedance_data["R1"],
@@ -349,17 +332,8 @@ def render():
                         "Z1_angle_deg": excel_impedance_data["Z1_angle_deg"],
                         "Z0_abs": excel_impedance_data["Z0_abs"],
                         "Z0_angle_deg": excel_impedance_data["Z0_angle_deg"],
-                        "ratio_gia_ct": excel_impedance_data["ratio_gia_ct"],
-                        "ratio_gia_vt": excel_impedance_data["ratio_gia_vt"],
-                        "ratio_gib_ct": excel_impedance_data["ratio_gib_ct"],
-                        "ratio_gib_vt": excel_impedance_data["ratio_gib_vt"],
                     }
                 )
-
-            if "excel_ratio_side" not in st.session_state:
-                st.session_state["excel_ratio_side"] = "Tidak gunakan dari Excel"
-
-            st.session_state["excel_ratio_side"] = "Tidak gunakan dari Excel"
 
         except Exception as e:
             st.error("Gagal membaca database spreadsheet.")
@@ -532,33 +506,6 @@ def render():
         default_lp_ct_secondary = assignment_ct_secondary
         default_lp_vt_primary = assignment_vt_primary
         default_lp_vt_secondary = assignment_vt_secondary
-
-        if excel_impedance_data:
-            ratio_side = st.session_state.get("excel_ratio_side", "Tidak gunakan dari Excel")
-
-            if ratio_side == "GI A":
-                ct_data = excel_impedance_data.get("ratio_gia_ct")
-                vt_data = excel_impedance_data.get("ratio_gia_vt")
-
-                if ct_data:
-                    default_lp_ct_primary = float(ct_data["primary"])
-                    default_lp_ct_secondary = float(ct_data["secondary"])
-
-                if vt_data:
-                    default_lp_vt_primary = float(vt_data["primary"])
-                    default_lp_vt_secondary = float(vt_data["secondary"])
-
-            elif ratio_side == "GI B":
-                ct_data = excel_impedance_data.get("ratio_gib_ct")
-                vt_data = excel_impedance_data.get("ratio_gib_vt")
-
-                if ct_data:
-                    default_lp_ct_primary = float(ct_data["primary"])
-                    default_lp_ct_secondary = float(ct_data["secondary"])
-
-                if vt_data:
-                    default_lp_vt_primary = float(vt_data["primary"])
-                    default_lp_vt_secondary = float(vt_data["secondary"])
 
         col_tr1, col_tr2, col_tr3, col_tr4 = st.columns(4)
 

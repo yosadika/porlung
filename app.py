@@ -440,8 +440,20 @@ def render_fault_weather_lightning_summary(tower_df: pd.DataFrame, key_prefix: s
         components.html(weather_html, height=760, scrolling=False)
 
 
+def _load_page_icon():
+    try:
+        from PIL import Image
+        import os
+        _icon_path = os.path.join(os.path.dirname(__file__), "assets", "favicon.ico")
+        if os.path.exists(_icon_path):
+            return Image.open(_icon_path)
+    except Exception:
+        pass
+    return "⚡"
+
 st.set_page_config(
     page_title="Transmission Fault Locator",
+    page_icon=_load_page_icon(),
     layout="wide"
 )
 
@@ -608,17 +620,36 @@ st.title("Transmission Fault Locator")
 _local_has_cfg = bool(st.session_state.get("local_cfg_file") is not None or st.session_state.get("case_local_cfg_bytes"))
 _local_has_dat = bool(st.session_state.get("local_dat_file") is not None or st.session_state.get("case_local_dat_bytes"))
 _local_complete = _local_has_cfg and _local_has_dat
+_case_restored = bool(st.session_state.get("_restored_case_hash"))
+_local_from_case = _case_restored and bool(st.session_state.get("case_local_cfg_bytes")) and bool(st.session_state.get("case_local_dat_bytes"))
 with st.sidebar.expander("Upload Local End COMTRADE", expanded=(_local_has_cfg or _local_has_dat) and not _local_complete):
-    cfg_file = st.file_uploader("Local .cfg", key="local_cfg_file")
-    dat_file = st.file_uploader("Local .dat", key="local_dat_file")
+    if _local_from_case:
+        _lcfg_name = st.session_state.get("case_local_cfg_name", "rekaman lokal")
+        st.success("Rekaman dimuat dari case tersimpan.")
+        st.caption(f"**{_lcfg_name}**")
+        st.caption("Muat ulang case atau unggah file baru untuk mengganti.")
+        cfg_file = None
+        dat_file = None
+    else:
+        cfg_file = st.file_uploader("Local .cfg", type=["cfg"], key="local_cfg_file")
+        dat_file = st.file_uploader("Local .dat", type=["dat"], key="local_dat_file")
 
 _remote_has_cfg = bool(st.session_state.get("remote_cfg_file") is not None or st.session_state.get("case_remote_cfg_bytes"))
 _remote_has_dat = bool(st.session_state.get("remote_dat_file") is not None or st.session_state.get("case_remote_dat_bytes"))
 _remote_complete = _remote_has_cfg and _remote_has_dat
+_remote_from_case = _case_restored and bool(st.session_state.get("case_remote_cfg_bytes")) and bool(st.session_state.get("case_remote_dat_bytes"))
 with st.sidebar.expander("Upload Remote End COMTRADE", expanded=(_remote_has_cfg or _remote_has_dat) and not _remote_complete):
-    st.caption("Untuk analisis Double-End (opsional).")
-    remote_cfg_file = st.file_uploader("Remote .cfg", key="remote_cfg_file")
-    remote_dat_file = st.file_uploader("Remote .dat", key="remote_dat_file")
+    if _remote_from_case:
+        _rcfg_name = st.session_state.get("case_remote_cfg_name", "rekaman remote")
+        st.success("Rekaman dimuat dari case tersimpan.")
+        st.caption(f"**{_rcfg_name}**")
+        st.caption("Muat ulang case atau unggah file baru untuk mengganti.")
+        remote_cfg_file = None
+        remote_dat_file = None
+    else:
+        st.caption("Untuk analisis Double-End (opsional).")
+        remote_cfg_file = st.file_uploader("Remote .cfg", type=["cfg"], key="remote_cfg_file")
+        remote_dat_file = st.file_uploader("Remote .dat", type=["dat"], key="remote_dat_file")
 
 # Auto-load credentials lokal dari folder `credentials/` (gitignored, tidak di-commit)
 # bila belum ada credentials yang dimuat. Mempermudah autentikasi service account
@@ -701,10 +732,7 @@ with st.sidebar.expander("Credentials", expanded=_creds_file_present and not _cr
                 st.session_state["runtime_credentials_loaded_name"] = _sb_cred.name
                 st.session_state["runtime_credentials_fingerprint"] = _sb_fp
                 _sb_applied = apply_runtime_credentials(_sb_payload)
-                st.success(
-                    "Credentials diterapkan: " + ", ".join(_sb_applied)
-                    if _sb_applied else "Credentials terbaca."
-                )
+                st.success("Credentials berhasil diterapkan." if _sb_applied else "Credentials terbaca.")
         elif st.session_state.get("runtime_credentials"):
             apply_runtime_credentials(st.session_state["runtime_credentials"])
     st.caption("Pengaturan lengkap & clear credentials tersedia di tab Setup DB.")
@@ -719,16 +747,18 @@ with st.sidebar.expander("Filter GI / Line", expanded=False):
         st.caption("Isi Database Spreadsheet URL di Setup DB untuk mengaktifkan filter.")
     else:
         try:
-            # ULTG dan Segment → dari line_impedance
+            # Segment → dari line_impedance
             _gf_li = read_google_spreadsheet_table_cached(_sidebar_db_url, _sidebar_line_sheet)
             _gf_li = make_streamlit_safe_columns(_gf_li)
+            _c_li_upt  = find_column(_gf_li, ["UPT"])
             _c_li_ultg = find_column(_gf_li, ["ULTG"])
             _c_li_seg  = find_column(_gf_li, ["SEGMENT"])
 
-            # GI, Bay, Line → dari distance_settings
+            # UPT, ULTG, GI, Bay, Line → dari distance_settings
             _ds_sheet = st.session_state.get("distance_settings_sheet_name", "distance_settings")
             _gf_ds = read_google_spreadsheet_table_cached(_sidebar_db_url, _ds_sheet)
             _gf_ds = make_streamlit_safe_columns(_gf_ds)
+            _c_ds_upt  = find_column(_gf_ds, ["UPT"])
             _c_ds_ultg = find_column(_gf_ds, ["ULTG"])
             _c_ds_gi   = find_column(_gf_ds, ["GI"])
             _c_ds_bay  = find_column(_gf_ds, ["BAY", "BAY PHT"])
@@ -775,12 +805,17 @@ with st.sidebar.expander("Filter GI / Line", expanded=False):
                 norm = _nv(val)
                 return df[df[col].astype(str).str.strip().apply(_nv) == norm]
 
-            # — ULTG (dari line_impedance) —
-            _sel_ultg = _sb_select("ULTG", _sf_vals(_gf_li, _c_li_ultg), "sidebar_filter_ultg")
-            _gf_li_u  = _filt(_gf_li, _c_li_ultg, _sel_ultg)
-            _gf_ds_u  = _filt(_gf_ds, _c_ds_ultg, _sel_ultg)
+            # — UPT (dari distance_settings) —
+            _sel_upt  = _sb_select("UPT", _sf_vals(_gf_ds, _c_ds_upt), "sidebar_filter_upt")
+            _gf_li_p  = _filt(_gf_li, _c_li_upt, _sel_upt)
+            _gf_ds_p  = _filt(_gf_ds, _c_ds_upt, _sel_upt)
 
-            # — Segment (dari line_impedance, difilter ULTG) —
+            # — ULTG (dari distance_settings, difilter UPT) —
+            _sel_ultg = _sb_select("ULTG", _sf_vals(_gf_ds_p, _c_ds_ultg), "sidebar_filter_ultg")
+            _gf_li_u  = _filt(_gf_li_p, _c_li_ultg, _sel_ultg)
+            _gf_ds_u  = _filt(_gf_ds_p, _c_ds_ultg, _sel_ultg)
+
+            # — Segment (dari line_impedance, difilter UPT → ULTG) —
             _sb_select("Segment", _sf_vals(_gf_li_u, _c_li_seg), "sidebar_filter_segment")
 
             def _bay_line_opts(df, bay_col, line_col):
@@ -862,6 +897,19 @@ if _sb_li_key != st.session_state.get("_sb_li_sync_key", ""):
 elif _sb_li_active and st.session_state.get("line_parameter_source", "Input Manual") == "Input Manual":
     # Sidebar aktif tapi source masih di default — pastikan sync terjadi (misal setelah case restore)
     st.session_state["line_parameter_source"] = "Database Excel Line Data"
+
+_sb_save_url = st.session_state.get("database_spreadsheet_url", "")
+if _sb_save_url and "line_param" in st.session_state:
+    _sb_line_name = st.session_state.get("line_param", {}).get("line_name", "") or "case"
+    _sb_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", _sb_line_name).strip("_") or "case"
+    _sb_case_name = f"porlungcase_{_sb_slug}"
+    if st.sidebar.button("Simpan Case ke Cloud", key="sidebar_save_case_cloud_btn", use_container_width=True):
+        _sb_sc_ok, _sb_sc_msg = save_case_to_cloud(_sb_save_url, _sb_case_name)
+        if _sb_sc_ok:
+            st.session_state.pop("_saved_cases_cache", None)
+            st.sidebar.success(_sb_sc_msg)
+        else:
+            st.sidebar.error(_sb_sc_msg)
 
 st.sidebar.divider()
 _case_loaded = bool(st.session_state.get("_restored_case_hash"))
@@ -952,9 +1000,11 @@ if cfg_file is None or dat_file is None:
                         st.session_state.pop("_saved_cases_cache", None)
                         st.rerun()
                 if _lp_do_load:
-                    _lp_ok, _lp_msg = load_case_from_cloud(_lp_cloud_url, str(_lp_cloud_opts[_lp_cloud_sel].get("case_id", "")))
+                    _lp_case_id = str(_lp_cloud_opts[_lp_cloud_sel].get("case_id", ""))
+                    _lp_ok, _lp_msg = load_case_from_cloud(_lp_cloud_url, _lp_case_id)
                     if _lp_ok:
                         st.session_state["case_restore_message"] = _lp_msg
+                        st.session_state["_restored_case_hash"] = f"cloud:{_lp_case_id}"
                         st.rerun()
                     else:
                         st.error(_lp_msg)
@@ -1169,6 +1219,14 @@ with tab_remote:
                 key="remote_ie_channel",
             )
 
+            st.markdown("### Koreksi Polaritas Remote")
+            st.caption("Aktifkan bila polaritas VT atau CT remote terpasang terbalik pada perekam. Berlaku untuk semua channel pada grup tersebut.")
+            col_rpol1, col_rpol2 = st.columns(2)
+            with col_rpol1:
+                remote_invert_voltage = st.checkbox("Balik Polaritas Tegangan Remote (Va, Vb, Vc) ×−1", key="remote_invert_voltage")
+            with col_rpol2:
+                remote_invert_current = st.checkbox("Balik Polaritas Arus Remote (Ia, Ib, Ic, IE) ×−1", key="remote_invert_current")
+
             st.markdown("### Remote End Transformer Data")
             remote_recorded_side_options = ["secondary", "primary"]
             remote_recorded_side_default_index = (
@@ -1236,6 +1294,8 @@ with tab_remote:
                 ct_secondary=remote_ct_secondary,
                 vt_primary=remote_vt_primary,
                 vt_secondary=remote_vt_secondary,
+                invert_voltage=remote_invert_voltage,
+                invert_current=remote_invert_current,
             )
             st.session_state["remote_assigned_df"] = remote_assigned_df
             st.session_state["remote_transformer_data"] = {
@@ -1244,6 +1304,8 @@ with tab_remote:
                 "ct_secondary": remote_ct_secondary,
                 "vt_primary": remote_vt_primary,
                 "vt_secondary": remote_vt_secondary,
+                "invert_voltage": remote_invert_voltage,
+                "invert_current": remote_invert_current,
                 "nominal_phase_voltage_rms": remote_vt_primary / math.sqrt(3.0),
                 "nominal_current_rms": remote_ct_primary,
             }
@@ -1306,7 +1368,13 @@ with tab_remote:
                         use_container_width=True,
                     )
             if remote_waveform_channels:
-                _rw_fig_key = (tuple(remote_waveform_channels), remote_waveform_display_mode, remote_waveform_frequency, len(remote_assigned_df))
+                _rw_td = st.session_state.get("remote_transformer_data") or {}
+                _rw_fig_key = (
+                    tuple(remote_waveform_channels), remote_waveform_display_mode, remote_waveform_frequency, len(remote_assigned_df),
+                    _rw_td.get("recorded_side"), _rw_td.get("ct_primary"), _rw_td.get("ct_secondary"),
+                    _rw_td.get("vt_primary"), _rw_td.get("vt_secondary"),
+                    _rw_td.get("invert_voltage"), _rw_td.get("invert_current"),
+                )
                 if st.session_state.get("_rw_fig_key") != _rw_fig_key:
                     remote_assigned_fig, remote_waveform_caption = build_assigned_waveform_plot(
                         remote_assigned_df,
@@ -1623,12 +1691,36 @@ def build_locus_zone_settings_from_session(end_side: str, label: str, loop_name:
     row_labels = build_locus_setting_row_labels(filtered_settings_df, distance_columns)
     selected_label = st.session_state.get(f"rx_locus_setting_row_{end_side}")
     if selected_label not in row_labels:
-        return [], {
-            "zone_count": 0,
-            "zone_setting_base": zone_setting_base,
-            "selected_substation": selected_substation,
-            "selected_bay": selected_bay,
-        }, None
+        # Auto-select: coba cocokkan dengan filter line sidebar (sama dengan logika di Locus tab).
+        # Memungkinkan Summary menampilkan zona proteksi tanpa user harus mengunjungi tab Locus.
+        def _nv_l(v):
+            try:
+                f = float(v)
+                if f == int(f):
+                    return str(int(f))
+            except (ValueError, TypeError):
+                pass
+            return str(v).strip().upper()
+        _sb_line = str(st.session_state.get(f"sidebar_filter_line_{end_side}", "") or "").strip()
+        _line_col = distance_columns.get("line")
+        _auto = None
+        if _sb_line and _sb_ia(_sb_line) and _line_col and _line_col in filtered_settings_df.columns:
+            _tgt = _nv_l(_sb_line)
+            for _i, _lbl in enumerate(row_labels):
+                if _nv_l(filtered_settings_df.iloc[_i][_line_col]) == _tgt:
+                    _auto = _lbl
+                    break
+        if _auto is None and len(row_labels) == 1:
+            _auto = row_labels[0]
+        if _auto is not None:
+            selected_label = _auto
+        else:
+            return [], {
+                "zone_count": 0,
+                "zone_setting_base": zone_setting_base,
+                "selected_substation": selected_substation,
+                "selected_bay": selected_bay,
+            }, None
     selected_row = filtered_settings_df.iloc[row_labels.index(selected_label)]
     zones = extract_locus_zone_settings(selected_row, distance_columns, loop_name)
     if zone_setting_base == "secondary":
@@ -2083,9 +2175,11 @@ with tab0:
                 key="saved_case_select",
             )
             if st.button("Muat Case Terpilih", key="load_case_cloud_btn", use_container_width=True):
-                _lc_ok, _lc_msg = load_case_from_cloud(_cloud_url, str(_opts[_sel_label].get("case_id", "")))
+                _lc_case_id = str(_opts[_sel_label].get("case_id", ""))
+                _lc_ok, _lc_msg = load_case_from_cloud(_cloud_url, _lc_case_id)
                 if _lc_ok:
                     st.success(_lc_msg)
+                    st.session_state["_restored_case_hash"] = f"cloud:{_lc_case_id}"
                     st.rerun()
                 else:
                     st.error(_lc_msg)
@@ -2603,8 +2697,11 @@ with summary_container:
     remote_single_summary = st.session_state.get("remote_single_ended_result")
     two_summary = st.session_state.get("two_ended_result")
     two_quality_summary = st.session_state.get("two_ended_quality", {})
-    _local_gi  = st.session_state.get("two_ended_local_gi_label", "GI Lokal")
-    _remote_gi = st.session_state.get("two_ended_remote_gi_label", "GI Remote")
+    _inferred_local_gi, _inferred_remote_gi = infer_gi_names_from_line_name(
+        (st.session_state.get("effective_line_param") or st.session_state.get("line_param") or {}).get("line_name", "")
+    )
+    _local_gi  = st.session_state.get("two_ended_local_gi_label") or _inferred_local_gi or "GI Lokal"
+    _remote_gi = st.session_state.get("two_ended_remote_gi_label") or _inferred_remote_gi or "GI Remote"
     _line_len  = float((st.session_state.get("effective_line_param") or st.session_state.get("line_param") or {}).get("length_km") or 0.0)
 
     # Waktu kejadian (hour/month) dari CFG — fitur diskriminatif penyebab gangguan
@@ -2900,6 +2997,8 @@ with summary_container:
             fault_time_cfg=_summary_fault_dt.isoformat(timespec="seconds") if _summary_fault_dt else "",
             line_name=_ds_line.get("line_name", ""),
             gi_local=_local_gi, gi_remote=_remote_gi,
+            upt=st.session_state.get("sidebar_filter_upt", ""),
+            ultg=st.session_state.get("sidebar_filter_ultg", ""),
             fault_type_result=fault_type_summary,
             high_resistance_result=st.session_state.get("high_resistance_result"),
             phasors=st.session_state.get("phasors"),
@@ -3150,7 +3249,13 @@ with tab3:
             )
 
     _lw_freq_plot = float(metadata.get("frequency") or 50.0)
-    _lw_fig_key = (tuple(selected_channels), waveform_display_mode, _lw_freq_plot, len(assigned_df))
+    _lw_td = st.session_state.get("local_transformer_data") or {}
+    _lw_fig_key = (
+        tuple(selected_channels), waveform_display_mode, _lw_freq_plot, len(assigned_df),
+        _lw_td.get("recorded_side"), _lw_td.get("ct_primary"), _lw_td.get("ct_secondary"),
+        _lw_td.get("vt_primary"), _lw_td.get("vt_secondary"),
+        _lw_td.get("invert_voltage"), _lw_td.get("invert_current"),
+    )
     if st.session_state.get("_lw_fig_key") != _lw_fig_key:
         fig, waveform_caption = build_assigned_waveform_plot(
             assigned_df,
@@ -3791,6 +3896,9 @@ def render_high_resistance_check(end_side: str):
 
 
 def render_single_ended_analysis(end_side: str):
+    if st.session_state.get("_se_success_msg"):
+        st.success(st.session_state.pop("_se_success_msg"))
+
     ctx = resolve_end_analysis_context(end_side, "Single-End")
     if ctx is None:
         return
@@ -3849,7 +3957,8 @@ def render_single_ended_analysis(end_side: str):
             st.session_state[result_key] = single_result
             st.session_state[df_key] = single_df
             st.session_state[context_key] = single_ended_fault_context
-            st.success("Single-ended fault location berhasil dihitung.")
+            st.session_state["_se_success_msg"] = "Single-ended fault location berhasil dihitung."
+            st.rerun()
         except Exception as e:
             st.error("Perhitungan single-ended gagal.")
             st.exception(e)

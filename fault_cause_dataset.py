@@ -34,7 +34,7 @@ DATASET_SHEET_NAME = "fault_cause"
 # `case_id` (kolom A) = kunci unik untuk upsert (update baris yang cocok, bukan duplikat).
 DATASET_COLUMNS = [
     "case_id",
-    "timestamp_analyzed", "fault_time_cfg", "line_name", "gi_local", "gi_remote",
+    "timestamp_analyzed", "fault_time_cfg", "line_name", "gi_local", "gi_remote", "upt", "ultg",
     "fault_type", "n_phases", "ground", "ft_confidence",
     "I0_A", "I1_A", "I2_A", "r_i2_i1", "r_i0_i1", "r_i0_i2",
     "ang_i2_i1_deg", "ang_i0_i1_deg", "r_v2_v1", "r_v0_v1",
@@ -93,6 +93,8 @@ def build_fault_cause_feature_row(
     line_name: str,
     gi_local: str,
     gi_remote: str,
+    upt: str,
+    ultg: str,
     fault_type_result: dict,
     high_resistance_result: dict,
     phasors: dict,
@@ -133,6 +135,8 @@ def build_fault_cause_feature_row(
         "line_name": line_name or "",
         "gi_local": gi_local or "",
         "gi_remote": gi_remote or "",
+        "upt": upt or "",
+        "ultg": ultg or "",
         "fault_type": fault_type,
         "n_phases": n_phases,
         "ground": int(bool(ground)),
@@ -241,12 +245,12 @@ def upsert_row_to_gsheet(spreadsheet_url: str, row: dict, columns: list, sheet_n
         if match_row:
             ss.values().update(
                 spreadsheetId=sid, range=f"{sheet_name}!A{match_row}:{last_col}{match_row}",
-                valueInputOption="USER_ENTERED", body={"values": values},
+                valueInputOption="RAW", body={"values": values},
             ).execute()
             return True, f"Baris DIPERBARUI (baris {match_row}) di sheet '{sheet_name}'.", "update"
         ss.values().append(
             spreadsheetId=sid, range=f"{sheet_name}!A1",
-            valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS", body={"values": values},
+            valueInputOption="RAW", insertDataOption="INSERT_ROWS", body={"values": values},
         ).execute()
         return True, f"Baris baru ditambahkan ke sheet '{sheet_name}'.", "append"
     except Exception as exc:

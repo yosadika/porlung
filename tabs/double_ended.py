@@ -425,6 +425,8 @@ def render():
                         "atau gunakan metode RMS envelope/superimposed, lalu cek ulang visual tegangan dan arus."
                     )
 
+            _sync_ltd = st.session_state.get("local_transformer_data") or {}
+            _sync_rtd = st.session_state.get("remote_transformer_data") or {}
             _sync_fig_key = (
                 tuple(sync_selected_channels),
                 round(remote_visual_shift_s, 9),
@@ -432,6 +434,8 @@ def render():
                 int(remote_fault_window.get("dft_index", 0)),
                 len(local_assigned_df),
                 len(remote_assigned_df),
+                _sync_ltd.get("invert_voltage"), _sync_ltd.get("invert_current"),
+                _sync_rtd.get("invert_voltage"), _sync_rtd.get("invert_current"),
             )
             if st.session_state.get("_de_sync_fig_key") == _sync_fig_key:
                 sync_fig = st.session_state["_de_sync_fig"]

@@ -26,7 +26,7 @@ def build_cause_table_html(rows: list, col_specs: list) -> str:
         "table.porlung-cause{border-collapse:collapse;width:100%;font-size:0.85rem;"
         f"color:{txt};table-layout:fixed;}}"
         f"table.porlung-cause th,table.porlung-cause td{{border:1px solid {border};"
-        "padding:6px 10px;text-align:left;vertical-align:top;word-break:break-word;"
+        "padding:6px 10px;text-align:left;vertical-align:middle;word-break:break-word;"
         "overflow-wrap:anywhere;}"
         f"table.porlung-cause th{{background:{head_bg};font-weight:600;}}"
         "table.porlung-cause td.center,table.porlung-cause th.center{text-align:center;}"
@@ -350,19 +350,19 @@ def estimate_summary_disturbance_cause(
     # Petir / Sambaran Petir
     ev = []; sc = 0
     if ground:
-        sc += 2; ev.append("gangguan ke tanah — pola umum flashover sambaran petir")
+        sc += 2; ev.append("Gangguan ke tanah — pola umum flashover sambaran petir")
     if low_rf:
         sc += 2; ev.append("Rf rendah → busur cepat khas petir, bukan kontak resistif")
     if n_phases == 1:
         sc += 1; ev.append("SLG — tipe paling umum untuk induksi/sambaran petir")
     if clean_slg_seq:
-        sc += 1; ev.append("komponen sekuens SLG murni (I0≈I1≈I2) — konsisten flashover satu fasa ke tanah")
+        sc += 1; ev.append("Komponen sekuens SLG murni (I0≈I1≈I2) — konsisten flashover satu fasa ke tanah")
     if wf_transient_sharp:
-        sc += 2; ev.append("waveform: transien/HF tajam (impulsif) di awal gangguan — tanda kuat sambaran petir")
+        sc += 2; ev.append("Waveform: transien/HF tajam (impulsif) di awal gangguan — tanda kuat sambaran petir")
     if wf_cleared is True:
-        sc += 1; ev.append("gangguan clear dalam rekaman (temporer) — konsisten flashover petir + reclose sukses")
+        sc += 1; ev.append("Gangguan clear dalam rekaman (temporer) — konsisten flashover petir + reclose sukses")
     if wx_thunder:
-        sc += 1; ev.append("cuaca lokasi saat ini: badai petir (caveat: bukan saat kejadian)")
+        sc += 1; ev.append("Cuaca lokasi saat ini: badai petir (caveat: bukan saat kejadian)")
     ev.append("Indonesia: kerapatan sambaran petir sangat tinggi sepanjang tahun")
     _cand("Sambaran Petir / Flashover", sc, ev)
 
@@ -371,13 +371,13 @@ def estimate_summary_disturbance_cause(
     if hr_suspected or rf_est >= 10:
         sc += 3; ev.append(f"Rf tinggi (≈ {rf_est:.1f} Ω) → kontak resistif khas pohon/vegetasi")
     if ground:
-        sc += 1; ev.append("gangguan ke tanah konsisten dengan kontak vegetasi")
+        sc += 1; ev.append("Gangguan ke tanah konsisten dengan kontak vegetasi")
     if (hr_suspected or rf_est >= 10) and r_i0_i1 >= 0.3:
-        sc += 1; ev.append(f"zero-sequence kuat (I0/I1 ≈ {r_i0_i1:.2f}) menegaskan jalur arus ke tanah")
+        sc += 1; ev.append(f"Zero-sequence kuat (I0/I1 ≈ {r_i0_i1:.2f}) menegaskan jalur arus ke tanah")
     if wf_cleared is False:
-        sc += 1; ev.append("gangguan bertahan/tidak clear (cenderung permanen) — konsisten kontak vegetasi persisten")
+        sc += 1; ev.append("Gangguan bertahan/tidak clear (cenderung permanen) — konsisten kontak vegetasi persisten")
     if wf_transient_sharp:
-        sc -= 1; ev.append("transien tajam kurang konsisten dengan kontak resistif lambat")
+        sc -= 1; ev.append("Transien tajam kurang konsisten dengan kontak resistif lambat")
     if low_rf:
         sc -= 2; ev.append("Rf rendah kurang konsisten dengan kontak vegetasi")
     _cand("Vegetasi / Pohon", sc, ev)
@@ -387,13 +387,13 @@ def estimate_summary_disturbance_cause(
     if n_phases == 1 and ground:
         sc += 2; ev.append("SLG khas bird streamer / satwa menjembatani celah udara")
     if clean_slg_seq:
-        sc += 1; ev.append("pola sekuens SLG murni (I0≈I1≈I2) khas streamer satu fasa ke tanah")
+        sc += 1; ev.append("Pola sekuens SLG murni (I0≈I1≈I2) khas streamer satu fasa ke tanah")
     if bird_window:
-        sc += 3; ev.append(f"jam kejadian ({hour:02d}:xx) dekat puncak diurnal bird streamer ~06:00 & ~22:00 (Minnaar 2014)")
+        sc += 3; ev.append(f"Jam kejadian ({hour:02d}:xx) dekat puncak diurnal bird streamer ~06:00 & ~22:00 (Minnaar 2014)")
     elif hour is not None:
-        ev.append(f"jam kejadian ({hour:02d}:xx) di luar puncak diurnal bird streamer")
+        ev.append(f"Jam kejadian ({hour:02d}:xx) di luar puncak diurnal bird streamer")
     if wf_cleared is True and (wf_duration_ms is not None and wf_duration_ms <= 100):
-        sc += 1; ev.append("durasi pendek + clear (temporer) — konsisten kontak satwa sesaat")
+        sc += 1; ev.append("Durasi pendek + clear (temporer) — konsisten kontak satwa sesaat")
     if low_rf:
         sc += 1; ev.append("Rf rendah konsisten dengan flashover streamer")
     _cand("Satwa Liar (Bird Streamer)", sc, ev)
@@ -401,27 +401,27 @@ def estimate_summary_disturbance_cause(
     # Flashover Polusi / Isolator
     ev = []; sc = 0
     if n_phases >= 2:
-        sc += 1; ev.append("dapat melibatkan >1 fasa saat lapisan polutan basah flashover")
+        sc += 1; ev.append("Dapat melibatkan >1 fasa saat lapisan polutan basah flashover")
     if ground:
-        sc += 1; ev.append("flashover sepanjang permukaan isolator ke tanah")
+        sc += 1; ev.append("Flashover sepanjang permukaan isolator ke tanah")
     if wx_wet:
-        sc += 2; ev.append("cuaca lokasi basah/lembap (hujan/kabut/RH tinggi) — pemicu flashover polusi (caveat: bukan saat kejadian)")
+        sc += 2; ev.append("Cuaca lokasi basah/lembap (hujan/kabut/RH tinggi) — pemicu flashover polusi (caveat: bukan saat kejadian)")
     if wet_season:
-        sc += 1; ev.append("musim hujan — pembasahan isolator lebih mungkin")
-    ev.append("perlu pembasahan (kabut/embun/hujan ringan); sering berulang pada lokasi yang sama")
+        sc += 1; ev.append("Musim hujan — pembasahan isolator lebih mungkin")
+    ev.append("Perlu pembasahan (kabut/embun/hujan ringan); sering berulang pada lokasi yang sama")
     _cand("Flashover Polusi / Isolator", sc, ev)
 
     # Kebakaran di bawah saluran
     ev = []; sc = 0
     if n_phases >= 2:
-        sc += 1; ev.append("kebakaran lahan dapat menurunkan kuat dielektrik udara → flashover multi-fasa")
+        sc += 1; ev.append("Kebakaran lahan dapat menurunkan kuat dielektrik udara → flashover multi-fasa")
     if low_rf:
         sc += 1; ev.append("Rf rendah konsisten dengan flashover melalui udara terionisasi")
     if dry_season:
-        sc += 1; ev.append("musim kemarau — risiko kebakaran lahan meningkat (Sumatra/Kalimantan)")
+        sc += 1; ev.append("Musim kemarau — risiko kebakaran lahan meningkat (Sumatra/Kalimantan)")
     if wx_dryclear:
-        sc += 1; ev.append("cuaca lokasi cerah-kering — mendukung kondisi rawan kebakaran (caveat: bukan saat kejadian)")
-    ev.append("verifikasi dengan hotspot AFIS/satelit di sekitar titik gangguan")
+        sc += 1; ev.append("Cuaca lokasi cerah-kering — mendukung kondisi rawan kebakaran (caveat: bukan saat kejadian)")
+    ev.append("Verifikasi dengan hotspot AFIS/satelit di sekitar titik gangguan")
     _cand("Kebakaran di Bawah Saluran", sc, ev)
 
     candidates.sort(key=lambda c: -c["score"])

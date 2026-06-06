@@ -39,7 +39,7 @@ Aplikasi Streamlit untuk analisis gangguan transmisi tenaga listrik. Membaca rek
 | `summary_helpers.py` | Waveform fokus Summary, scoring SE/DE, grafik posisi SE/DE; `build_de_position_figure()`/`build_summary_location_plot()` (label both-GI, marker filled); `estimate_summary_disturbance_cause(..., fault_hour, fault_month, weather_context, waveform_signatures)` return `(label, detail_dict)` — candidate-scoring penyebab (petir/vegetasi/satwa/polusi/kebakaran) dari fault type + komponen simetris (rasio I2/I1, I0/I1, I0/I2 + sudut + impedansi Z0/Z1/Z2) + Rf + hour/bulan + cuaca lokasi + tanda waveform (transien/durasi/reclose), basis literatur `literature/fault_type/` (lihat memory `fault_cause_references`) |
 | `tabs/line_parameter.py` | Render tab Line; **satu-satunya** selector sumber panjang line (`line_length_source`); simpan `effective_line_param` ke session_state; `@st.fragment` |
 | `tabs/double_ended.py` | Render tab Double-End; `render_de_formula_expander()`; `@st.fragment`; plot Line Position draggable + label both-GI; Status Diagnostik human-readable; fault cursor compact pakai `settings_source_prefix` |
-| `tabs/signal_assignment.py` | Render sub-tab Signals di Local End — **TIDAK `@st.fragment`** karena mengubah `assigned_df` yang menjadi fondasi semua kalkulasi |
+| `tabs/signal_assignment.py` | Render sub-tab Signals di Local End — **TIDAK `@st.fragment`** karena mengubah `assigned_df` yang menjadi fondasi semua kalkulasi; termasuk section **Koreksi Polaritas** (`local_invert_voltage`, `local_invert_current`) |
 
 ## Aturan Wajib
 
@@ -73,7 +73,7 @@ Beberapa fungsi render menggunakan `@st.fragment` agar perubahan dropdown tidak 
 | `render_high_resistance_check` | `app.py` | — (display only) |
 | `render_simple_rx_locus` | `app.py` | — (display only) |
 
-**`tabs/signal_assignment.py` TIDAK di-fragment** — mengubah channel atau CT/VT ratio mengubah `assigned_df` yang menjadi fondasi phasor, SE, DE. Tanpa full rerun, downstream state menjadi stale dan kalkulasi salah.
+**`tabs/signal_assignment.py` TIDAK di-fragment** — mengubah channel, CT/VT ratio, atau flag `invert_voltage`/`invert_current` mengubah `assigned_df` yang menjadi fondasi phasor, SE, DE. Tanpa full rerun, downstream state menjadi stale dan kalkulasi salah.
 
 **Aturan fragment:** hanya gunakan jika perubahan widget di dalam TIDAK mempengaruhi state yang dibaca tab/fungsi lain, ATAU ada `st.rerun(scope="app")` setelah perubahan penting.
 
@@ -89,6 +89,8 @@ Selector sumber panjang line (Line Parameter vs Tower Schedule) **hanya** ada di
 ## Cache Version Bumping
 
 Figure yang di-cache di session_state (`_de_viz_fig`, `_sloc_key`, `_summary_rx_cache`) menyertakan key versi/parameter di cache key. Saat label/format figure diubah, **bump versi string** agar cache lama otomatis dibuang. `_sloc_key` saat ini `"v3"`. **Cache figure yang dipengaruhi pilihan zona/relay (R-X Locus Summary) wajib menyertakan semua key relay** (`rx_locus_setting_row_*`, substation, bay, show_zone, zone_setting_base) — kalau tidak, Summary menyajikan figure stale.
+
+**Cache waveform** (`_lw_fig_key`, `_rw_fig_key`, `_de_sync_fig_key`) **wajib menyertakan `invert_voltage` dan `invert_current`** dari `local_transformer_data`/`remote_transformer_data` — tanpanya, membalik polaritas tidak langsung memperbarui plot.
 
 ## Plot Line Position Visualization (DE & Summary)
 
@@ -109,6 +111,8 @@ Figure yang di-cache di session_state (`_de_viz_fig`, `_sloc_key`, `_summary_rx_
 - Summary dirender lebih awal; hasil kalkulasi yang dihitung setelahnya baru tampil pada rerun berikutnya.
 - Fragment + session_state: perubahan di dalam fragment baru terlihat tab lain setelah full rerun. Selalu pastikan `st.rerun(scope="app")` dipanggil setelah perubahan penting.
 - **Sync sidebar→widget lintas-tab: authoritative** (set tiap run saat filter aktif, sebelum tabs render) lebih reliable dari change-guard yang rapuh terhadap restore. R-X Locus substation/bay di-set tiap run dari sidebar bila `_sb_ia` aktif.
+- **Sidebar filter hierarchy:** UPT (level 0, dari `distance_settings`) → ULTG (level 1, dari `distance_settings`, difilter UPT) → Segment (level 2, dari `line_impedance`, difilter UPT+ULTG) → GI/Bay/Line local/remote (level 3–8, dari `distance_settings`). **Jangan kembalikan ULTG ke `line_impedance`** — sudah dipindah ke `distance_settings` agar hierarki UPT→ULTG konsisten.
+- **Koreksi polaritas channel:** `invert_voltage`/`invert_current` di `local_transformer_data`/`remote_transformer_data`. Bila Visual Sync Score DE ≈ −1, kemungkinan VT remote terbalik → centang "Balik Polaritas Tegangan Remote". Jangan tambah logika pembalikan di tempat lain selain `apply_signal_assignment()`.
 - **Selectbox: jangan campur `index=` + `key=`** bila session_state di-set dari luar → konflik. Pakai `key=` saja + seed default ke session_state bila kosong/invalid (lihat R-X Locus substation).
 - **Normalisasi nilai numerik konsisten** antara sumber & konsumen: `"1.0"` (spreadsheet) vs `"1"` (sidebar `_nv`) — gunakan helper normalisasi sama (`_nv_line`) saat mencocokkan.
 - **Case snapshot: objek figure (Plotly/Matplotlib) di-DROP jadi `None`** (`make_case_json_safe`) — bukan JSON-safe, `str()` menghasilkan string sampah raksasa yang membengkakkan payload (locus/figure berisi ribuan titik). Figure & cache-nya **dihitung ulang dari state saat restore** (locus dari `rx_locus_setting_row_*` + assigned_df + fault_window). Selection (string/angka) tetap tersimpan via general snapshot loop. Jangan simpan objek render ke case.

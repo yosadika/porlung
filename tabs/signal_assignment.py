@@ -185,6 +185,14 @@ def render(df):
     else:
         st.info("Channel IE/IN/3I0 tidak dipilih. Aplikasi akan menghitung IE residual dari Ia + Ib + Ic.")
 
+    st.markdown("### Koreksi Polaritas")
+    st.caption("Aktifkan bila polaritas VT atau CT terpasang terbalik pada perekam (P/N tertukar). Berlaku untuk semua channel pada grup tersebut.")
+    col_pol1, col_pol2 = st.columns(2)
+    with col_pol1:
+        invert_voltage = st.checkbox("Balik Polaritas Tegangan (Va, Vb, Vc) ×−1", key="local_invert_voltage")
+    with col_pol2:
+        invert_current = st.checkbox("Balik Polaritas Arus (Ia, Ib, Ic, IE) ×−1", key="local_invert_current")
+
     selected_assignment_channels = [
         va_channel,
         vb_channel,
@@ -300,6 +308,8 @@ def render(df):
         ct_secondary=ct_secondary,
         vt_primary=vt_primary,
         vt_secondary=vt_secondary,
+        invert_voltage=invert_voltage,
+        invert_current=invert_current,
     )
 
     st.session_state["assigned_df"] = assigned_df
@@ -309,6 +319,8 @@ def render(df):
         "ct_secondary": ct_secondary,
         "vt_primary": vt_primary,
         "vt_secondary": vt_secondary,
+        "invert_voltage": invert_voltage,
+        "invert_current": invert_current,
         "nominal_phase_voltage_rms": vt_primary / math.sqrt(3.0),
         "nominal_current_rms": ct_primary,
     }

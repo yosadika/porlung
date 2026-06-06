@@ -126,7 +126,12 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Recorded side:
   - `secondary`: waveform dikalikan rasio CT/VT ke satuan primer.
   - `primary`: waveform dianggap sudah primer; rasio CT/VT tetap disimpan untuk dokumentasi dan locus secondary conversion.
-- Transformer data disimpan untuk local dan remote: `ct_primary`, `ct_secondary`, `vt_primary`, `vt_secondary`, nominal phase voltage RMS, nominal current RMS.
+- **Koreksi Polaritas** — dua checkbox per end (Local & Remote):
+  - `invert_voltage`: kalikan Va/Vb/Vc dengan −1 setelah rasio VT. Digunakan bila VT terpasang terbalik di COMTRADE (gejala: Visual Sync Score DE ≈ −1).
+  - `invert_current`: kalikan Ia/Ib/Ic/IE dengan −1 setelah rasio CT. Digunakan bila CT terpasang terbalik (gejala: lokasi SE/DE negatif atau >100%).
+  - Implementasi: `apply_signal_assignment(..., invert_voltage, invert_current)` di `signal_assignment.py`.
+- Transformer data disimpan untuk local dan remote: `ct_primary`, `ct_secondary`, `vt_primary`, `vt_secondary`, `invert_voltage`, `invert_current`, nominal phase voltage RMS, nominal current RMS.
+- CT/VT ratio **tidak lagi** dibaca dari spreadsheet `line_impedance` — diinput langsung di Signal Assignment.
 - Validasi duplikasi channel wajib: `Va/Vb/Vc/Ia/Ib/Ic` tidak boleh memakai channel yang sama lebih dari satu kali.
 
 ---

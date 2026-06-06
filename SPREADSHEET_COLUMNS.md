@@ -1,6 +1,6 @@
 # Mapping Kolom Spreadsheet — Transmission Fault Locator
 
-Dokumen ini mendokumentasikan semua kolom yang dipakai dari setiap spreadsheet yang digunakan aplikasi. Diperbarui terakhir: 6 Juni 2026.
+Dokumen ini mendokumentasikan semua kolom yang dipakai dari setiap spreadsheet yang digunakan aplikasi. Diperbarui terakhir: 6 Juni 2026 (v1.0.30).
 
 ---
 
@@ -64,6 +64,8 @@ Dibaca oleh `conductor_impedance_importer.py`, ditampilkan di `tabs/line_paramet
 | `RATIO GI A VT` | `GI A VT`, `GIA VT`, `VT GI A` | `primary/secondary` (mis. `150000/110`) | VT ratio sisi lokal |
 | `RATIO GI B CT` | `GI B CT`, `GIB CT`, `CT GI B` | `primary/secondary` | CT ratio sisi remote |
 | `RATIO GI B VT` | `GI B VT`, `GIB VT`, `VT GI B` | `primary/secondary` | VT ratio sisi remote |
+
+> **Dihapus sejak v1.0.30:** Kolom `RATIO GI A CT/VT`, `RATIO GI B CT/VT`, `GI A`, `GI B` tidak lagi dibaca dari spreadsheet. CT/VT ratio diinput langsung di **Signal Assignment** (Local/Remote End); nama GI diturunkan dari nama saluran via `infer_gi_names_from_line_name()`. Kolom boleh tetap ada di spreadsheet tanpa efek.
 
 #### Session State yang Diisi
 
@@ -241,14 +243,17 @@ Filter sidebar membaca nilai dari kedua spreadsheet di atas untuk mengisi dropdo
 
 | Key | Sumber Kolom | Sheet | Keterangan |
 |---|---|---|---|
-| `sidebar_filter_ultg` | `ULTG` | `line_impedance` | Level 1: filter ULTG |
-| `sidebar_filter_segment` | `SEGMENT` | `line_impedance` | Level 2: filter Segment (setelah ULTG) |
+| `sidebar_filter_upt` | `UPT` | `distance_settings` | Level 0: filter UPT (unit) |
+| `sidebar_filter_ultg` | `ULTG` | `distance_settings` | Level 1: filter ULTG (sub-unit, difilter UPT) |
+| `sidebar_filter_segment` | `SEGMENT` | `line_impedance` | Level 2: filter Segment (difilter UPT→ULTG) |
 | `sidebar_filter_gi_local` | `GI` | `distance_settings` | Level 3: GI lokal |
 | `sidebar_filter_bay_local` | `BAY` | `distance_settings` | Level 4: Bay lokal |
 | `sidebar_filter_line_local` | `LINE` | `distance_settings` | Level 5: Line lokal |
 | `sidebar_filter_gi_remote` | `GI` | `distance_settings` | Level 6: GI remote |
 | `sidebar_filter_bay_remote` | `BAY` | `distance_settings` | Level 7: Bay remote |
 | `sidebar_filter_line_remote` | `LINE` | `distance_settings` | Level 8: Line remote |
+
+> **Perubahan v1.0.30:** ULTG sebelumnya diambil dari `line_impedance`; sekarang diambil dari `distance_settings` agar hierarki UPT→ULTG konsisten. UPT ditambahkan sebagai level tertinggi (level 0) di atas ULTG.
 
 ---
 
@@ -288,7 +293,7 @@ Dirakit oleh `fault_cause_dataset.build_fault_cause_feature_row()` (43 kolom, `D
 | Grup | Kolom |
 |---|---|
 | **Kunci unik** | `case_id` (kolom A — upsert key) |
-| Metadata | `timestamp_analyzed`, `fault_time_cfg`, `line_name`, `gi_local`, `gi_remote` |
+| Metadata | `timestamp_analyzed`, `fault_time_cfg`, `line_name`, `gi_local`, `gi_remote`, `upt`, `ultg` |
 | Fault type | `fault_type`, `n_phases`, `ground`, `ft_confidence` |
 | Komponen simetris | `I0_A`,`I1_A`,`I2_A`, `r_i2_i1`,`r_i0_i1`,`r_i0_i2`, `ang_i2_i1_deg`,`ang_i0_i1_deg`, `r_v2_v1`,`r_v0_v1`, `Z1_ohm`,`Z2_ohm`,`Z0_ohm` |
 | Resistansi | `rf_est_ohm`, `hr_suspected` |

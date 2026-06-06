@@ -15,6 +15,8 @@ def apply_signal_assignment(
     ct_secondary: float = 1.0,
     vt_primary: float = 150000.0,
     vt_secondary: float = 100.0,
+    invert_voltage: bool = False,
+    invert_current: bool = False,
 ):
     """
     Melakukan mapping channel COMTRADE menjadi nama standar:
@@ -23,9 +25,8 @@ def apply_signal_assignment(
     Jika recorded_side = secondary, nilai dikonversi ke primary.
     Jika recorded_side = primary, nilai dipakai langsung.
 
-    Catatan:
-    - Tegangan dikalikan VT ratio jika data sekunder.
-    - Arus dikalikan CT ratio jika data sekunder.
+    invert_voltage=True  → semua Va/Vb/Vc dikali −1 (koreksi polaritas VT terbalik).
+    invert_current=True  → semua Ia/Ib/Ic/IE dikali −1 (koreksi polaritas CT terbalik).
     """
 
     assigned = pd.DataFrame()
@@ -41,16 +42,19 @@ def apply_signal_assignment(
         voltage_multiplier = 1.0
         current_multiplier = 1.0
 
-    assigned["Va"] = df[va_channel] * voltage_multiplier
-    assigned["Vb"] = df[vb_channel] * voltage_multiplier
-    assigned["Vc"] = df[vc_channel] * voltage_multiplier
+    v_sign = -1.0 if invert_voltage else 1.0
+    i_sign = -1.0 if invert_current else 1.0
 
-    assigned["Ia"] = df[ia_channel] * current_multiplier
-    assigned["Ib"] = df[ib_channel] * current_multiplier
-    assigned["Ic"] = df[ic_channel] * current_multiplier
+    assigned["Va"] = df[va_channel] * voltage_multiplier * v_sign
+    assigned["Vb"] = df[vb_channel] * voltage_multiplier * v_sign
+    assigned["Vc"] = df[vc_channel] * voltage_multiplier * v_sign
+
+    assigned["Ia"] = df[ia_channel] * current_multiplier * i_sign
+    assigned["Ib"] = df[ib_channel] * current_multiplier * i_sign
+    assigned["Ic"] = df[ic_channel] * current_multiplier * i_sign
 
     if ie_channel and ie_channel != "None":
-        assigned["IE"] = df[ie_channel] * current_multiplier
+        assigned["IE"] = df[ie_channel] * current_multiplier * i_sign
         assigned["IE_source"] = "measured"
     else:
         assigned["IE"] = assigned["Ia"] + assigned["Ib"] + assigned["Ic"]

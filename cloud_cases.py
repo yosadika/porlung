@@ -28,6 +28,7 @@ from fault_cause_dataset import (
     read_sheet_records,
     upsert_row_to_gsheet,
 )
+from fault_workflow_helpers import parse_comtrade_timestamp
 from line_analysis_helpers import infer_gi_names_from_line_name
 
 SAVED_CASES_SHEET = "saved_cases"
@@ -108,7 +109,9 @@ def save_case_to_cloud(spreadsheet_url: str, case_name: str = "", sheet_name: st
 
     line_name = str((st.session_state.get("line_param") or {}).get("line_name") or "")
     meta = st.session_state.get("local_metadata") or {}
-    fault_time = str(meta.get("cfg_trigger_time") or meta.get("cfg_start_time") or "")
+    _ft_raw = meta.get("cfg_trigger_time") or meta.get("cfg_start_time") or ""
+    _ft_dt = parse_comtrade_timestamp(str(_ft_raw))
+    fault_time = _ft_dt.isoformat(timespec="seconds") if _ft_dt else str(_ft_raw)
     cid = make_case_id(line_name, fault_time)
     if not cid:
         return False, "Tidak dapat membuat case_id (line_name & waktu kejadian kosong)."

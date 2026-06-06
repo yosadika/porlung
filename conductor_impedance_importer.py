@@ -289,12 +289,6 @@ def detect_impedance_columns(df: pd.DataFrame):
                 "CIRCUIT",
             ],
         ),
-        "gia_name": find_column(df, ["GI A", "GIA"]),
-        "gib_name": find_column(df, ["GI B", "GIB"]),
-        "ratio_gia_ct": find_column(df, ["RATIO GI A CT", "GI A CT", "GIA CT", "CT GI A"]),
-        "ratio_gia_vt": find_column(df, ["RATIO GI A VT", "GI A VT", "GIA VT", "VT GI A"]),
-        "ratio_gib_ct": find_column(df, ["RATIO GI B CT", "GI B CT", "GIB CT", "CT GI B"]),
-        "ratio_gib_vt": find_column(df, ["RATIO GI B VT", "GI B VT", "GIB VT", "VT GI B"]),
     }
 
     sequence_columns = detect_sequence_impedance_groups(columns)
@@ -585,8 +579,6 @@ def extract_impedance_from_row(row, columns: dict):
     bay = None
     line_number = None
     segment = None
-    gi_a = None
-    gi_b = None
     conductor_type = None
 
     if columns.get("upt"):
@@ -607,39 +599,33 @@ def extract_impedance_from_row(row, columns: dict):
     if columns.get("segment"):
         segment = str(row[columns["segment"]])
 
-    if columns.get("gia_name"):
-        gi_a = str(row[columns["gia_name"]])
-
-    if columns.get("gib_name"):
-        gi_b = str(row[columns["gib_name"]])
-
     if columns.get("conductor_type"):
         conductor_type = str(row[columns["conductor_type"]])
 
     if columns.get("line_name"):
         line_name = str(row[columns["line_name"]])
 
-    if (not gi_a or gi_a.lower() == "nan") and gi and gi.lower() != "nan":
-        gi_a = gi
-
-    if (not gi_b or gi_b.lower() == "nan") and bay and bay.lower() != "nan":
-        gi_b = bay
-
     if not line_name or line_name.lower() == "nan":
         if segment and segment.lower() != "nan":
             line_name = segment
-        elif gi_a and gi_b:
-            line_name = f"{gi_a} - {gi_b}"
+        elif gi and bay and gi.lower() != "nan" and bay.lower() != "nan":
+            line_name = f"{gi} - {bay}"
         elif bay:
             line_name = bay
 
+    # Tambahkan nomor sirkit/line ke nama bila tersedia (misal GNTUA-SBHAN → GNTUA-SBHAN#1)
+    if line_name and line_number:
+        _ln = str(line_number).strip()
+        if _ln.lower() not in ("nan", "", "0"):
+            try:
+                _ln = str(int(float(_ln)))  # "1.0" → "1"
+            except (ValueError, OverflowError):
+                pass
+            if "#" not in line_name:
+                line_name = f"{line_name}#{_ln}"
+
     if columns.get("length"):
         length = to_float(row[columns["length"]])
-
-    ratio_gia_ct = parse_ratio(row[columns["ratio_gia_ct"]]) if columns.get("ratio_gia_ct") else None
-    ratio_gia_vt = parse_ratio(row[columns["ratio_gia_vt"]]) if columns.get("ratio_gia_vt") else None
-    ratio_gib_ct = parse_ratio(row[columns["ratio_gib_ct"]]) if columns.get("ratio_gib_ct") else None
-    ratio_gib_vt = parse_ratio(row[columns["ratio_gib_vt"]]) if columns.get("ratio_gib_vt") else None
 
     return {
         "upt": upt,
@@ -649,8 +635,6 @@ def extract_impedance_from_row(row, columns: dict):
         "segment": segment,
         "line_name": line_name,
         "bay_pht": bay,
-        "gi_a": gi_a,
-        "gi_b": gi_b,
         "conductor_type": conductor_type,
         "length": length,
         "Z1": z1,
@@ -663,10 +647,6 @@ def extract_impedance_from_row(row, columns: dict):
         "Z1_angle_deg": math.degrees(math.atan2(z1.imag, z1.real)),
         "Z0_abs": abs(z0),
         "Z0_angle_deg": math.degrees(math.atan2(z0.imag, z0.real)),
-        "ratio_gia_ct": ratio_gia_ct,
-        "ratio_gia_vt": ratio_gia_vt,
-        "ratio_gib_ct": ratio_gib_ct,
-        "ratio_gib_vt": ratio_gib_vt,
     }
 
 
