@@ -1,6 +1,6 @@
 # Mapping Kolom Spreadsheet — Transmission Fault Locator
 
-Dokumen ini mendokumentasikan semua kolom yang dipakai dari setiap spreadsheet yang digunakan aplikasi. Diperbarui terakhir: 3 Juni 2026.
+Dokumen ini mendokumentasikan semua kolom yang dipakai dari setiap spreadsheet yang digunakan aplikasi. Diperbarui terakhir: 6 Juni 2026.
 
 ---
 
@@ -318,6 +318,4 @@ Simpan/muat case via spreadsheet — **TANPA Google Drive** (service account aku
 | `size_bytes` | Ukuran ZIP |
 | `n_chunks` | Jumlah chunk payload di `saved_cases_data` |
 
-**`saved_cases_data`** = payload (1 baris/case, dibuat dgn ~200 kolom): `[case_id, chunk0, chunk1, ...]`. Payload = ZIP case → base64, dipecah ≤49000 char/sel (di bawah batas 50.000). Ditulis RAW (agar base64 tak jadi formula). Load: cari baris by `case_id` → gabung sel chunk → base64 decode → `restore_case_archive`.
-
-Load: pilih baris (urut `saved_at` desc) → download `drive_file_id` dari Drive → `restore_case_archive`. Payload **tidak** disimpan di sheet (hanya indeks); folder Drive harus di-share Editor ke service account.
+**`saved_cases_data`** = payload (1 baris/case, dibuat dgn ~200 kolom): `[case_id, chunk0, chunk1, ...]`. Payload = ZIP case → base64, dipecah ≤49000 char/sel (di bawah batas 50.000). Ditulis RAW (agar base64 tak jadi formula). Load: pilih dari `saved_cases` (urut `saved_at` desc) → cari baris by `case_id` di `saved_cases_data` → gabung sel chunk → base64 decode → `restore_case_archive`. Objek figure (Plotly) di-drop saat snapshot (dihitung ulang dari selection), jadi payload ramping.

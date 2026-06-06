@@ -21,9 +21,9 @@ Aplikasi Streamlit untuk analisis gangguan transmisi tenaga listrik. Membaca rek
 |---|---|
 | `app.py` | Entry point, sidebar upload, tab utama, CSS global |
 | `app_runtime.py` | Cache COMTRADE/Sheets, query tower schedule, monkey-patch dataframe |
-| `app_helpers.py` | Helper umum lintas fitur (downsampling, validasi, normalisasi); konstanta `OHM = chr(0x03A9)`; `cached_style_format()` untuk cache `.style.format()` |
+| `app_helpers.py` | Helper umum lintas fitur (downsampling, validasi, normalisasi); konstanta `OHM = chr(0x03A9)`; `cached_style_format()` untuk cache `.style.format()`; `plotly_image_filename()` (nama file unduhan plot `porlungplot_{line}_{timestamp}`) |
 | `auto_assignment.py` | Deteksi otomatis channel tegangan/arus dari COMTRADE; scoring dengan suffix/prefix match (bukan substring sembarangan) |
-| `case_storage.py` | Runtime credentials, save/restore case ZIP; `CASE_SETTINGS_KEYS` menjamin kunci konfigurasi selalu tersimpan; `_WIDGET_RESTORE_CLEANUP_KEYS`/`_WIDGET_RESTORE_CLEANUP_PREFIXES` mencegah widget key masuk restore |
+| `case_storage.py` | Runtime credentials, save/restore case ZIP; `CASE_SETTINGS_KEYS` menjamin kunci konfigurasi selalu tersimpan; `_WIDGET_RESTORE_CLEANUP_KEYS`/`_WIDGET_RESTORE_CLEANUP_PREFIXES` mencegah widget key masuk restore; `make_case_json_safe()` **drop objek figure Plotly/Matplotlib jadi `None`** (recompute saat restore) |
 | `weather_services.py` | API cuaca (OpenWeather, Open-Meteo), formatter data |
 | `weather_ui.py` | HTML kartu cuaca, icon, tren suhu, bar peluang hujan |
 | `tower_map.py` | Interpolasi fault pada jalur tower, render Folium map, tabel tower dengan badge proteksi |
@@ -56,7 +56,7 @@ Aplikasi Streamlit untuk analisis gangguan transmisi tenaga listrik. Membaca rek
    - Tower Map Summary: default fault source = DE jika tersedia
 7. **Setelah perubahan apapun**, jalankan:
    ```
-   python -m py_compile app.py app_runtime.py app_helpers.py auto_assignment.py case_storage.py weather_services.py weather_ui.py tower_map.py rx_locus.py line_analysis_helpers.py waveform_helpers.py waveform_signatures.py fault_cause_dataset.py cloud_cases.py fault_workflow_helpers.py summary_helpers.py single_ended.py two_ended.py high_resistance.py fault_detection.py fault_type.py phasor.py comtrade_reader.py tabs/line_parameter.py tabs/double_ended.py tabs/signal_assignment.py
+   python -m py_compile app.py app_runtime.py app_helpers.py auto_assignment.py case_storage.py weather_services.py weather_ui.py tower_map.py rx_locus.py line_analysis_helpers.py waveform_helpers.py waveform_signatures.py fault_cause_dataset.py cloud_cases.py fault_workflow_helpers.py summary_helpers.py single_ended.py two_ended.py high_resistance.py fault_detection.py fault_type.py phasor.py comtrade_reader.py conductor_impedance_importer.py line_parameter.py signal_assignment.py tabs/line_parameter.py tabs/double_ended.py tabs/signal_assignment.py
    ```
 8. **Setelah perubahan workflow**, validasi minimal: Summary, Setup DB, Local End, Remote End, Line, HR Check, Single-End, Double-End, R-X Locus.
 9. **Setelah perubahan kalkulasi**, validasi: SE/DE memakai sumber panjang line yang dipilih, Tower Map fault interpolasi memakai `KUMULATIF km`, Summary tidak blank bila kalkulasi belum lengkap.

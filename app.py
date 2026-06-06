@@ -867,43 +867,6 @@ st.sidebar.divider()
 _case_loaded = bool(st.session_state.get("_restored_case_hash"))
 with st.sidebar.expander("Case Storage", expanded=False):
     case_archive_file = st.file_uploader("Load Case (.zip)", type=["zip"], key="case_archive_file")
-
-    # Muat case tersimpan dari spreadsheet (tanpa upload COMTRADE/ZIP) — butuh credentials
-    _sb_cloud_url = st.session_state.get("database_spreadsheet_url", "")
-    if _sb_cloud_url:
-        _sb_cloud_sheet = st.session_state.get("saved_cases_sheet_name") or SAVED_CASES_SHEET
-        st.caption("Atau muat case tersimpan dari spreadsheet:")
-        _sb_cache_key = f"{_sb_cloud_url}|{_sb_cloud_sheet}"
-        if st.session_state.get("_saved_cases_cache_key") != _sb_cache_key or "_saved_cases_cache" not in st.session_state:
-            st.session_state["_saved_cases_cache"] = list_saved_cases(_sb_cloud_url, _sb_cloud_sheet)
-            st.session_state["_saved_cases_cache_key"] = _sb_cache_key
-        _sb_cloud_cases = st.session_state["_saved_cases_cache"]
-        if not _sb_cloud_cases:
-            st.caption("Belum ada case tersimpan.")
-            if st.button("↻ Muat Ulang Daftar", key="reload_sidebar_saved_cases", use_container_width=True):
-                st.session_state.pop("_saved_cases_cache", None)
-                st.rerun()
-        else:
-            _sb_cloud_opts = {
-                f"{c.get('case_name') or '-'}  |  {c.get('saved_at') or '-'}": c for c in _sb_cloud_cases
-            }
-            _sb_cloud_sel = st.selectbox(
-                "Pilih case (terbaru di atas)", list(_sb_cloud_opts.keys()), key="sidebar_saved_case_select"
-            )
-            _sb_b1, _sb_b2 = st.columns([3, 1])
-            with _sb_b1:
-                _sb_do_load = st.button("Muat Case Terpilih", key="sidebar_load_case_cloud_btn", use_container_width=True)
-            with _sb_b2:
-                if st.button("↻", key="reload_sidebar_saved_cases", help="Muat ulang daftar", use_container_width=True):
-                    st.session_state.pop("_saved_cases_cache", None)
-                    st.rerun()
-            if _sb_do_load:
-                _sb_ok, _sb_msg = load_case_from_cloud(_sb_cloud_url, str(_sb_cloud_opts[_sb_cloud_sel].get("case_id", "")))
-                if _sb_ok:
-                    st.session_state["case_restore_message"] = _sb_msg
-                    st.rerun()
-                else:
-                    st.sidebar.error(_sb_msg)
 if case_archive_file is not None:
     import hashlib as _hashlib
     _archive_bytes = case_archive_file.getvalue()
@@ -956,6 +919,45 @@ if cfg_file is None or dat_file is None:
             "Tabel pre-fault/fault GI local dan GI remote, waveform fokus fault, "
             "estimasi penyebab gangguan, serta grafik SE/DE."
         )
+
+        # ── Muat Case Tersimpan dari Spreadsheet ────────────────────────────
+        _lp_cloud_url = st.session_state.get("database_spreadsheet_url", "")
+        if _lp_cloud_url:
+            st.divider()
+            st.markdown("### Muat Case Tersimpan")
+            st.caption("Pilih case yang pernah disimpan ke spreadsheet, lalu klik **Muat Case Terpilih**.")
+            _lp_cloud_sheet = st.session_state.get("saved_cases_sheet_name") or SAVED_CASES_SHEET
+            _lp_cache_key = f"{_lp_cloud_url}|{_lp_cloud_sheet}"
+            if st.session_state.get("_saved_cases_cache_key") != _lp_cache_key or "_saved_cases_cache" not in st.session_state:
+                st.session_state["_saved_cases_cache"] = list_saved_cases(_lp_cloud_url, _lp_cloud_sheet)
+                st.session_state["_saved_cases_cache_key"] = _lp_cache_key
+            _lp_cloud_cases = st.session_state["_saved_cases_cache"]
+            if not _lp_cloud_cases:
+                st.caption("Belum ada case tersimpan di spreadsheet.")
+                if st.button("↻ Muat Ulang Daftar", key="reload_landing_saved_cases", use_container_width=False):
+                    st.session_state.pop("_saved_cases_cache", None)
+                    st.rerun()
+            else:
+                _lp_cloud_opts = {
+                    f"{c.get('case_name') or '-'}  |  {c.get('saved_at') or '-'}": c for c in _lp_cloud_cases
+                }
+                _lp_cloud_sel = st.selectbox(
+                    "Pilih case (terbaru di atas)", list(_lp_cloud_opts.keys()), key="landing_saved_case_select"
+                )
+                _lp_b1, _lp_b2 = st.columns([4, 1])
+                with _lp_b1:
+                    _lp_do_load = st.button("Muat Case Terpilih", key="landing_load_case_cloud_btn", use_container_width=True)
+                with _lp_b2:
+                    if st.button("↻", key="reload_landing_saved_cases", help="Muat ulang daftar", use_container_width=True):
+                        st.session_state.pop("_saved_cases_cache", None)
+                        st.rerun()
+                if _lp_do_load:
+                    _lp_ok, _lp_msg = load_case_from_cloud(_lp_cloud_url, str(_lp_cloud_opts[_lp_cloud_sel].get("case_id", "")))
+                    if _lp_ok:
+                        st.session_state["case_restore_message"] = _lp_msg
+                        st.rerun()
+                    else:
+                        st.error(_lp_msg)
     st.stop()
 
 local_cfg_bytes = cfg_file.getvalue()

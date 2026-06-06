@@ -73,9 +73,11 @@ _WIDGET_RESTORE_CLEANUP_KEYS = frozenset({
     "save_case_cloud_btn",
     "load_case_cloud_btn",
     "sidebar_load_case_cloud_btn",
+    "landing_load_case_cloud_btn",
     # Selectbox daftar saved case — value lama bisa tak ada di opsi baru saat restore
     "saved_case_select",
     "sidebar_saved_case_select",
+    "landing_saved_case_select",
 })
 # Prefix widget keys yang tidak boleh di-restore (button, download_button, dll.)
 # Semua prefix ini aman karena tidak ada state key yang valid diawali nama-nama ini.
