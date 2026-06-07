@@ -73,7 +73,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 
 1. `app.py` memuat import, constant, cache wrapper, dan helper render.
 2. `st.set_page_config` dijalankan.
-3. Sidebar meminta upload: Local `.cfg`, Local `.dat`, Remote `.cfg` (opsional), Remote `.dat` (opsional), Load Case `.zip`.
+3. Sidebar meminta upload: Local `.cfg`, Local `.dat`, Remote `.cfg` (opsional), Remote `.dat` (opsional), Load Case `.zip`. Filter GI/line berada di expander upload masing-masing end.
 4. Jika user memilih Load Case `.zip`, `case_storage.restore_case_archive()` memulihkan state dan file, lalu aplikasi rerun.
 5. Jika sidebar kosong tapi case restore punya file tersimpan, `case_storage.get_restored_upload()` membuat object upload pengganti.
 6. Aplikasi validasi ekstensi local `.cfg` dan `.dat` via `app_helpers.validate_uploaded_extension()`.
@@ -104,6 +104,10 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Local COMTRADE wajib: `.cfg` dan `.dat`.
 - Remote COMTRADE opsional: dipakai untuk Double-End, remote HR, remote SE, remote R-X locus, dan perbandingan summary.
 - Sidebar menerima `Load Case (.zip)` untuk memulihkan rekaman, parameter user, dan hasil kalkulasi.
+- Filter upload Local End: UPT/ULTG dari `distance_settings`, Segment dari `line_impedance`, GI dan Bay/Line dari `distance_settings`.
+- Filter upload Remote End: UPT/ULTG dari `distance_settings`, GI dan Bay/Line dari `distance_settings`; remote tidak memilih Segment sendiri.
+- Segment hanya dipilih di Local End agar satu segment/line menjadi konteks line/tower, tetapi UPT/ULTG local dan remote boleh berbeda untuk kasus GI local dan GI remote berada di UPT/ULTG berbeda. Legacy session key `sidebar_filter_upt` dan `sidebar_filter_ultg` tetap diisi dari pilihan Local End.
+- Dropdown filter upload end hanya muncul jika Database Spreadsheet URL tersedia dari credentials, secret/env, atau input Setup DB. Jika belum tersedia, sidebar upload hanya menampilkan uploader rekaman.
 - Database spreadsheet utama: line parameter dan distance relay settings.
 - Spreadsheet tower schedule terpisah: data tower, panjang line alternatif, map, dan fault location map.
 - File Excel/Google Sheet conductor impedance: sumber parameter konduktor/line opsional.
@@ -192,7 +196,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - `JARAK` dan `KUMULATIF` dari spreadsheet dianggap meter. Aplikasi menambahkan `JARAK km` dan `KUMULATIF km`.
 - Tampilan km: 6 desimal pada tabel utama (berpengaruh ke kalkulasi DE/SE).
 - Panjang line dari tower schedule: prioritas `max(KUMULATIF km)`, fallback `sum(JARAK km)`, disimpan ke `tower_schedule_selected_length_km`.
-- Filter awal load: ULTG, Segment (difilter berdasarkan ULTG), opsi `Load semua data` tersedia tapi tidak default.
+- Filter awal load: ULTG dan Segment diprefill dari filter upload Local End; opsi `Load semua data` tersedia tapi tidak default. Segment matching adaptif terhadap variasi tanda hubung seperti `GNTUA-SBHAN` dan `GNTUA - SBHAN`.
 - Filter setelah load: Segment, ULTG, Type String, pencarian span/teks.
 
 ---
@@ -263,7 +267,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Optional TWS/time-based: estimasi jarak dari selisih waktu kedatangan gelombang, warning bila delta time/distance tidak realistis (rumus → FORMULAS.md jika diimplementasi penuh).
 - Scenario: internal line fault atau reverse/backfeed/external fault. SOTF/parallel/adjacent line diperlakukan sebagai konteks reverse/backfeed, bukan label wajib.
 - Perbandingan SE pada halaman DE memakai `effective_line_param` yang sama.
-- **Status Diagnostik DE** ditampilkan dengan label bahasa Indonesia + emoji (bukan kode mentah seperti `NORMAL_INTERNAL_LINE_FAULT`); catatan kondisi di expander "Detail kondisi yang terdeteksi"; rekomendasi sebagai `st.info`.
+- **Status Diagnostik DE** ditampilkan dengan label bahasa Indonesia berbasis teks ASCII (`[OK]`, `[PERHATIAN]`, `[TIDAK BERLAKU]`) agar aman dari mojibake; jangan tampilkan kode mentah seperti `NORMAL_INTERNAL_LINE_FAULT`. Catatan kondisi ada di expander "Detail kondisi yang terdeteksi"; rekomendasi sebagai `st.info`.
 - **Warning DE** ditulis dengan pola apa-yang-terjadi → mengapa → tindakan (disimpan di sumber `two_ended.py` agar konsisten di DE dan Summary).
 - **Line Position Visualization** (Grafik SE dan DE, juga di Summary): label annotation **draggable** (Plotly `config editable`, tanpa teks "Click to enter"); label & hover menampilkan jarak dari **kedua GI** (lokal + remote); semua marker **filled** (distinksi lokal/remote lewat warna). **Tidak ada auto-placement label** — overlap diatasi dengan drag manual. Nama file saat tombol kamera (download) ditekan: `porlungplot_{nama_line}_{YYYYMMDD}_{HHMMSS}` via `toImageButtonOptions.filename` (`app_helpers.plotly_image_filename()`).
 - Hasil disimpan: `two_ended_result`, `two_ended_quality`, `two_ended_reverse_result`, `two_ended_reverse_quality`, `two_ended_comparison_df`, local/remote SE comparison result.
@@ -276,7 +280,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Membaca distance relay setting dari sheet `distance_settings`.
 - Filter relay setting: GI/Substation, Bay, search text.
 - **Selector "Pilih setting relay distance" default placeholder** (`— Pilih setting relay distance —`) — tidak auto-pick baris pertama (rawan salah GI).
-- **Sinkronisasi dari filter sidebar (authoritative):** bila filter GI/Bay/Line di sidebar aktif, GI/Substation + Bay + baris relay di halaman locus **otomatis terpilih** mengikuti sidebar (set tiap run sebelum widget). Pencocokan baris relay memakai kolom LINE dengan normalisasi numerik (`"1.0"`=`"1"`). Bila sidebar placeholder, halaman locus pakai default sendiri + bisa dipilih manual.
+- **Sinkronisasi dari filter upload end (authoritative):** bila filter GI/Bay/Line di expander upload Local/Remote aktif, GI/Substation + Bay + baris relay di halaman locus **otomatis terpilih** mengikuti filter end terkait (set tiap run sebelum widget). Pencocokan baris relay memakai kolom LINE dengan normalisasi numerik (`"1.0"`=`"1"`). Bila filter masih placeholder, halaman locus pakai default sendiri + bisa dipilih manual.
 - Zone setting base: **default primary ohm**. Optional: relay secondary ohm, dikonversi ke primary via rasio CT/VT dari Signal Assignment.
 - Parameter zona: `Z1/Z2/Z3 Res Ph`, `Z1/Z2/Z3 Res Gnd`, kN dan kN angle jika tersedia.
 - Zona quadrilateral: X reach dan R reach/resistive reach, phase/gnd reach dipilih sesuai loop fault.
@@ -309,7 +313,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Panel kiri wajib: lokasi fault + span pengapit, timestamp cuaca, simbol cuaca, deskripsi bahasa Indonesia, temperatur `°C`, terasa seperti, hujan saat ini `mm`, angin `km/h`, kelembapan `%`, tutupan awan `%`, kumulatif fault `km`.
 - Panel kanan wajib: tren suhu `°C`, peluang hujan `%`, ringkasan titik gangguan, peluang hujan tertinggi, perkiraan hujan total, sub-card forecast per 1 jam, footer koordinat + sumber API.
 - Grafik tren: titik/batang vertikal sederhana tanpa garis penghubung; grafik hujan: bar sederhana. Tidak boleh terpotong/clipping.
-- Simbol cuaca via HTML entity, bukan emoji mentah (hindari encoding mojibake).
+- Simbol/status cuaca memakai label teks ASCII (mis. `Cloud`, `Storm`, `Rain`), bukan emoji mentah atau karakter simbol yang rawan encoding mojibake.
 - Terjemahan deskripsi cuaca: `Broken Clouds` → `Berawan`, `Scattered Clouds` → `Berawan sebagian`, `Overcast Clouds` → `Mendung`, `Mainly Clear` → `Umumnya cerah`, `Clear Sky` → `Cerah`, `Light Rain` → `Hujan ringan`.
 - Teks ringkasan hujan: `Tidak ada indikasi hujan dalam 12 jam ke depan.` / `Ada peluang hujan mulai sekitar HH:MM.` — jangan gunakan `hujan kuat/lebat` tanpa klasifikasi intensitas.
 - Jangan tampilkan widget atau label petir/badai tanpa provider lightning aktual.

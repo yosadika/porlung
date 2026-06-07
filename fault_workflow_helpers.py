@@ -1,4 +1,4 @@
-import contextlib
+﻿import contextlib
 import re
 from datetime import datetime
 
@@ -186,16 +186,31 @@ def calculate_auto_fault_detection_parameters(
             if channel in df.columns
         ]
 
-        current_rms_max = np.nanmax(np.vstack(current_rms), axis=0)
-        voltage_rms_min = np.nanmin(np.vstack(voltage_rms), axis=0)
+        def _nan_column_reduce(values, reducer):
+            stack = np.vstack(values)
+            result = np.full(stack.shape[1], np.nan, dtype=float)
+            valid_columns = np.isfinite(stack).any(axis=0)
+            if valid_columns.any():
+                result[valid_columns] = reducer(stack[:, valid_columns], axis=0)
+            return result
+
+        def _nan_scalar_reduce(values, reducer, default=np.nan):
+            arr = np.asarray(values, dtype=float)
+            arr = arr[np.isfinite(arr)]
+            if arr.size == 0:
+                return float(default)
+            return float(reducer(arr))
+
+        current_rms_max = _nan_column_reduce(current_rms, np.nanmax)
+        voltage_rms_min = _nan_column_reduce(voltage_rms, np.nanmin)
 
         baseline_slice = slice(samples_per_cycle, prefault_samples)
         search_slice = slice(prefault_samples, None)
 
-        prefault_current = float(np.nanmedian(current_rms_max[baseline_slice]))
-        prefault_voltage = float(np.nanmedian(voltage_rms_min[baseline_slice]))
-        observed_current_max = float(np.nanmax(current_rms_max[search_slice]))
-        observed_voltage_min = float(np.nanmin(voltage_rms_min[search_slice]))
+        prefault_current = _nan_scalar_reduce(current_rms_max[baseline_slice], np.nanmedian)
+        prefault_voltage = _nan_scalar_reduce(voltage_rms_min[baseline_slice], np.nanmedian)
+        observed_current_max = _nan_scalar_reduce(current_rms_max[search_slice], np.nanmax)
+        observed_voltage_min = _nan_scalar_reduce(voltage_rms_min[search_slice], np.nanmin)
 
         voltage_reference = prefault_voltage
         current_reference = prefault_current
@@ -329,7 +344,7 @@ def explain_sync_warning():
     )
 
 
-# Mapping key_prefix → partner key_prefix untuk sinkronisasi checkbox auto-detection
+# Mapping key_prefix -> partner key_prefix untuk sinkronisasi checkbox auto-detection
 _FC_SYNC_PARTNERS = {
     "local_fc":     "de_local_fc",
     "de_local_fc":  "local_fc",
@@ -341,6 +356,29 @@ _FC_SYNC_PARTNERS = {
 def _sync_checkbox(src_key: str, dst_key: str) -> None:
     """on_change callback: langsung set nilai partner checkbox ke nilai yang sama."""
     st.session_state[dst_key] = st.session_state[src_key]
+
+
+def _seed_widget_default(key: str, value):
+    """Seed widget state once so restored case values do not conflict with defaults."""
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+def _seed_choice_default(key: str, options, value, fallback_index: int = 0):
+    if st.session_state.get(key) not in options:
+        fallback_index = min(max(int(fallback_index), 0), max(len(options) - 1, 0))
+        st.session_state[key] = value if value in options else options[fallback_index]
+
+
+def _seed_multiselect_default(key: str, options, defaults):
+    options = list(options)
+    current = st.session_state.get(key)
+    if isinstance(current, (list, tuple)):
+        filtered = [item for item in current if item in options]
+        if filtered:
+            st.session_state[key] = filtered
+            return
+    st.session_state[key] = [item for item in defaults if item in options]
 
 
 def _render_local_fault_cursor(
@@ -384,7 +422,7 @@ def _render_local_fault_cursor(
     if settings_source_prefix:
         # Compact DE view: parameter lain dari source, hanya checkbox auto dirender
         st.caption(
-            "⚙️ Parameter deteksi mengikuti pengaturan di halaman **Local End > Fault Cursor**. "
+            "Parameter deteksi mengikuti pengaturan di halaman **Local End > Fault Cursor**. "
             "Checkbox di bawah disinkronkan antar kedua halaman."
         )
         _auto_partner_key = f"{settings_source_prefix}_use_auto_fault_detection"
@@ -420,11 +458,13 @@ def _render_local_fault_cursor(
         st.markdown("### Parameter Deteksi Gangguan")
 
         col_fd1, col_w1, col_w2 = st.columns(3)
+        _seed_widget_default(f"{key_prefix}_frequency", float(metadata["frequency"]) if metadata["frequency"] else 50.0)
+        _seed_widget_default(f"{key_prefix}_pre_fault_cycles", 2)
+        _seed_widget_default(f"{key_prefix}_post_fault_cycles", 4)
 
         with col_fd1:
             frequency = st.number_input(
                 "Frekuensi Sistem (Hz)",
-                value=float(metadata["frequency"]) if metadata["frequency"] else 50.0,
                 min_value=40.0,
                 max_value=70.0,
                 step=0.001,
@@ -435,7 +475,6 @@ def _render_local_fault_cursor(
         with col_w1:
             pre_fault_cycles = st.number_input(
                 "Pre-fault Window (cycles)",
-                value=2,
                 min_value=1,
                 max_value=10,
                 step=1,
@@ -445,7 +484,6 @@ def _render_local_fault_cursor(
         with col_w2:
             post_fault_cycles = st.number_input(
                 "Post-fault Window (cycles)",
-                value=4,
                 min_value=1,
                 max_value=20,
                 step=1,
@@ -475,10 +513,17 @@ def _render_local_fault_cursor(
         _thresh_ctx = st.expander("Parameter Deteksi Lanjutan", expanded=False) if compact else contextlib.nullcontext()
         with _thresh_ctx:
             col_fd2, col_fd3 = st.columns(2)
+            _seed_widget_default(
+                f"{key_prefix}_current_threshold_multiplier",
+                float(auto_fault_detection_settings["current_threshold_multiplier"]),
+            )
+            _seed_widget_default(
+                f"{key_prefix}_voltage_drop_threshold",
+                float(auto_fault_detection_settings["voltage_drop_threshold"]),
+            )
             with col_fd2:
                 current_threshold_multiplier = st.number_input(
                     "Multiplier Kenaikan Arus",
-                    value=float(auto_fault_detection_settings["current_threshold_multiplier"]),
                     min_value=1.01,
                     max_value=10.0,
                     step=0.001,
@@ -489,7 +534,6 @@ def _render_local_fault_cursor(
             with col_fd3:
                 voltage_drop_threshold = st.number_input(
                     "Batas Drop Tegangan",
-                    value=float(auto_fault_detection_settings["voltage_drop_threshold"]),
                     min_value=0.1,
                     max_value=1.0,
                     step=0.0001,
@@ -508,13 +552,18 @@ def _render_local_fault_cursor(
                 ).style.format(
                     {"Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x}
                 ),
-                use_container_width=True,
+                width="stretch",
             )
 
         with st.expander("Advanced Fault Bar Tuning"):
+            _seed_widget_default(f"{key_prefix}_use_advanced_fault_detection", bool(use_auto_fault_detection))
+            _seed_choice_default(f"{key_prefix}_fault_detection_method", ["legacy_rms", "hybrid_superimposed"], "hybrid_superimposed", 1)
+            _seed_widget_default(f"{key_prefix}_adaptive_threshold_sigma", 6.0)
+            _seed_widget_default(f"{key_prefix}_superimposed_threshold_sigma", 8.0)
+            _seed_widget_default(f"{key_prefix}_consecutive_samples_input", 0)
+            _seed_widget_default(f"{key_prefix}_refine_fault_bar", True)
             use_advanced_fault_detection = st.checkbox(
                 "Use Advanced Fault Detection",
-                value=use_auto_fault_detection,
                 help="Aktifkan hanya jika fault bar otomatis kurang presisi pada record lokal.",
                 disabled=use_auto_fault_detection,
                 key=f"{key_prefix}_use_advanced_fault_detection",
@@ -523,7 +572,6 @@ def _render_local_fault_cursor(
             fault_detection_method = st.selectbox(
                 "Fault Detection Method",
                 ["legacy_rms", "hybrid_superimposed"],
-                index=1,
                 disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
                 help="hybrid_superimposed memakai energi perubahan satu siklus lalu divalidasi RMS.",
                 key=f"{key_prefix}_fault_detection_method",
@@ -534,7 +582,6 @@ def _render_local_fault_cursor(
             with col_adv1:
                 adaptive_threshold_sigma = st.number_input(
                     "Adaptive Threshold Sigma",
-                    value=6.0,
                     min_value=2.0,
                     max_value=20.0,
                     step=0.001,
@@ -547,7 +594,6 @@ def _render_local_fault_cursor(
             with col_adv2:
                 superimposed_threshold_sigma = st.number_input(
                     "Superimposed Threshold Sigma",
-                    value=8.0,
                     min_value=2.0,
                     max_value=30.0,
                     step=0.001,
@@ -564,7 +610,6 @@ def _render_local_fault_cursor(
             with col_adv3:
                 consecutive_samples_input = st.number_input(
                     "Consecutive Samples",
-                    value=0,
                     min_value=0,
                     max_value=200,
                     step=1,
@@ -576,7 +621,6 @@ def _render_local_fault_cursor(
             with col_adv4:
                 refine_fault_bar = st.checkbox(
                     "Refine Fault Bar",
-                    value=True,
                     help="Backtrack dari kandidat RMS ke perubahan instantaneous awal.",
                     disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
                     key=f"{key_prefix}_refine_fault_bar",
@@ -716,10 +760,15 @@ def _render_local_fault_cursor(
             st.info(_info_text)
             if not compact:
                 display_df = assigned_df.copy()
+                _plot_options = ["Va", "Vb", "Vc", "Ia", "Ib", "Ic", "IE"]
+                _seed_multiselect_default(
+                    f"{key_prefix}_fault_window_plot_channels",
+                    _plot_options,
+                    ["Ia", "Ib", "Ic"],
+                )
                 selected_plot = st.multiselect(
                     "Pilih sinyal untuk validasi fault window",
-                    ["Va", "Vb", "Vc", "Ia", "Ib", "Ic", "IE"],
-                    default=["Ia", "Ib", "Ic"],
+                    _plot_options,
                     key=f"{key_prefix}_fault_window_plot_channels",
                 )
                 fig = build_fault_window_plot(
@@ -729,14 +778,19 @@ def _render_local_fault_cursor(
                 fig.update_layout(xaxis_range=[
                     fault_window["left_time"] - _pad, fault_window["right_time"] + _pad,
                 ])
-                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_fault_window_chart")
+                st.plotly_chart(fig, width="stretch", key=f"{key_prefix}_fault_window_chart")
 
         if compact:
             display_df = assigned_df.copy()
+            _plot_options = ["Va", "Vb", "Vc", "Ia", "Ib", "Ic", "IE"]
+            _seed_multiselect_default(
+                f"{key_prefix}_fault_window_plot_channels",
+                _plot_options,
+                ["Ia", "Ib", "Ic"],
+            )
             selected_plot = st.multiselect(
                 "Pilih sinyal untuk validasi fault window",
-                ["Va", "Vb", "Vc", "Ia", "Ib", "Ic", "IE"],
-                default=["Ia", "Ib", "Ic"],
+                _plot_options,
                 key=f"{key_prefix}_fault_window_plot_channels",
             )
             fig = build_fault_window_plot(
@@ -746,7 +800,7 @@ def _render_local_fault_cursor(
             fig.update_layout(xaxis_range=[
                 fault_window["left_time"] - _pad, fault_window["right_time"] + _pad,
             ])
-            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_fault_window_chart")
+            st.plotly_chart(fig, width="stretch", key=f"{key_prefix}_fault_window_chart")
 
         render_fault_cursor_explanation(detection, fault_window)
 
@@ -790,7 +844,7 @@ def _render_remote_fault_cursor(
 
     if settings_source_prefix:
         st.caption(
-            "⚙️ Parameter deteksi mengikuti pengaturan di halaman **Remote End > Fault Cursor**. "
+            "Parameter deteksi mengikuti pengaturan di halaman **Remote End > Fault Cursor**. "
             "Checkbox di bawah disinkronkan antar kedua halaman."
         )
         _auto_partner_key = f"{settings_source_prefix}_use_auto_fault_detection"
@@ -826,11 +880,13 @@ def _render_remote_fault_cursor(
         st.markdown("### Parameter Deteksi Gangguan")
 
         col_fd1, col_w1, col_w2 = st.columns(3)
+        _seed_widget_default(f"{key_prefix}_frequency", float(metadata.get("frequency") or 50.0))
+        _seed_widget_default(f"{key_prefix}_pre_fault_cycles", 2)
+        _seed_widget_default(f"{key_prefix}_post_fault_cycles", 4)
 
         with col_fd1:
             frequency = st.number_input(
                 "Frekuensi Sistem (Hz)",
-                value=float(metadata.get("frequency") or 50.0),
                 min_value=40.0,
                 max_value=70.0,
                 step=0.001,
@@ -841,7 +897,6 @@ def _render_remote_fault_cursor(
         with col_w1:
             pre_fault_cycles = st.number_input(
                 "Pre-fault Window (cycles)",
-                value=2,
                 min_value=1,
                 max_value=10,
                 step=1,
@@ -851,7 +906,6 @@ def _render_remote_fault_cursor(
         with col_w2:
             post_fault_cycles = st.number_input(
                 "Post-fault Window (cycles)",
-                value=4,
                 min_value=1,
                 max_value=20,
                 step=1,
@@ -881,10 +935,17 @@ def _render_remote_fault_cursor(
         _thresh_ctx = st.expander("Parameter Deteksi Lanjutan", expanded=False) if compact else contextlib.nullcontext()
         with _thresh_ctx:
             col_fd2, col_fd3 = st.columns(2)
+            _seed_widget_default(
+                f"{key_prefix}_current_threshold_multiplier",
+                float(auto_fault_detection_settings["current_threshold_multiplier"]),
+            )
+            _seed_widget_default(
+                f"{key_prefix}_voltage_drop_threshold",
+                float(auto_fault_detection_settings["voltage_drop_threshold"]),
+            )
             with col_fd2:
                 current_threshold_multiplier = st.number_input(
                     "Multiplier Kenaikan Arus",
-                    value=float(auto_fault_detection_settings["current_threshold_multiplier"]),
                     min_value=1.01,
                     max_value=10.0,
                     step=0.001,
@@ -895,7 +956,6 @@ def _render_remote_fault_cursor(
             with col_fd3:
                 voltage_drop_threshold = st.number_input(
                     "Batas Drop Tegangan",
-                    value=float(auto_fault_detection_settings["voltage_drop_threshold"]),
                     min_value=0.1,
                     max_value=1.0,
                     step=0.0001,
@@ -914,13 +974,18 @@ def _render_remote_fault_cursor(
                 ).style.format(
                     {"Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x}
                 ),
-                use_container_width=True,
+                width="stretch",
             )
 
         with st.expander("Advanced Fault Bar Tuning"):
+            _seed_widget_default(f"{key_prefix}_use_advanced_fault_detection", bool(use_auto_fault_detection))
+            _seed_choice_default(f"{key_prefix}_fault_detection_method", ["legacy_rms", "hybrid_superimposed"], "hybrid_superimposed", 1)
+            _seed_widget_default(f"{key_prefix}_adaptive_threshold_sigma", 6.0)
+            _seed_widget_default(f"{key_prefix}_superimposed_threshold_sigma", 8.0)
+            _seed_widget_default(f"{key_prefix}_consecutive_samples_input", 0)
+            _seed_widget_default(f"{key_prefix}_refine_fault_bar", True)
             use_advanced_fault_detection = st.checkbox(
                 "Use Advanced Fault Detection",
-                value=use_auto_fault_detection,
                 help="Aktifkan hanya jika fault bar otomatis kurang presisi pada record remote.",
                 disabled=use_auto_fault_detection,
                 key=f"{key_prefix}_use_advanced_fault_detection",
@@ -929,7 +994,6 @@ def _render_remote_fault_cursor(
             fault_detection_method = st.selectbox(
                 "Fault Detection Method",
                 ["legacy_rms", "hybrid_superimposed"],
-                index=1,
                 disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
                 help="hybrid_superimposed memakai energi perubahan satu siklus lalu divalidasi RMS.",
                 key=f"{key_prefix}_fault_detection_method",
@@ -940,7 +1004,6 @@ def _render_remote_fault_cursor(
             with col_adv1:
                 adaptive_threshold_sigma = st.number_input(
                     "Adaptive Threshold Sigma",
-                    value=6.0,
                     min_value=2.0,
                     max_value=20.0,
                     step=0.001,
@@ -953,7 +1016,6 @@ def _render_remote_fault_cursor(
             with col_adv2:
                 superimposed_threshold_sigma = st.number_input(
                     "Superimposed Threshold Sigma",
-                    value=8.0,
                     min_value=2.0,
                     max_value=30.0,
                     step=0.001,
@@ -970,7 +1032,6 @@ def _render_remote_fault_cursor(
             with col_adv3:
                 consecutive_samples_input = st.number_input(
                     "Consecutive Samples",
-                    value=0,
                     min_value=0,
                     max_value=200,
                     step=1,
@@ -982,7 +1043,6 @@ def _render_remote_fault_cursor(
             with col_adv4:
                 refine_fault_bar = st.checkbox(
                     "Refine Fault Bar",
-                    value=True,
                     help="Backtrack dari kandidat RMS ke perubahan instantaneous awal.",
                     disabled=(not use_advanced_fault_detection or use_auto_fault_detection),
                     key=f"{key_prefix}_refine_fault_bar",
@@ -1128,10 +1188,15 @@ def _render_remote_fault_cursor(
                     ch for ch in ["Va", "Vb", "Vc", "Ia", "Ib", "Ic", "IE"]
                     if ch in assigned_df.columns
                 ]
+                _remote_defaults = [c for c in ["Ia", "Ib", "Ic"] if c in remote_plot_channels] or remote_plot_channels[:3]
+                _seed_multiselect_default(
+                    f"{key_prefix}_fault_window_plot_channels",
+                    remote_plot_channels,
+                    _remote_defaults,
+                )
                 remote_selected_plot = st.multiselect(
                     "Pilih sinyal remote untuk validasi fault window",
                     remote_plot_channels,
-                    default=[c for c in ["Ia", "Ib", "Ic"] if c in remote_plot_channels] or remote_plot_channels[:3],
                     key=f"{key_prefix}_fault_window_plot_channels",
                 )
                 if remote_selected_plot:
@@ -1144,17 +1209,22 @@ def _render_remote_fault_cursor(
                         fault_window["left_time"] - _pad,
                         fault_window["right_time"] + _pad,
                     ])
-                    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_fault_window_chart")
+                    st.plotly_chart(fig, width="stretch", key=f"{key_prefix}_fault_window_chart")
 
         if compact:
             remote_plot_channels = [
                 ch for ch in ["Va", "Vb", "Vc", "Ia", "Ib", "Ic", "IE"]
                 if ch in assigned_df.columns
             ]
+            _remote_defaults = [c for c in ["Ia", "Ib", "Ic"] if c in remote_plot_channels] or remote_plot_channels[:3]
+            _seed_multiselect_default(
+                f"{key_prefix}_fault_window_plot_channels",
+                remote_plot_channels,
+                _remote_defaults,
+            )
             remote_selected_plot = st.multiselect(
                 "Pilih sinyal remote untuk validasi fault window",
                 remote_plot_channels,
-                default=[c for c in ["Ia", "Ib", "Ic"] if c in remote_plot_channels] or remote_plot_channels[:3],
                 key=f"{key_prefix}_fault_window_plot_channels",
             )
             if remote_selected_plot:
@@ -1167,7 +1237,7 @@ def _render_remote_fault_cursor(
                     fault_window["left_time"] - _pad,
                     fault_window["right_time"] + _pad,
                 ])
-                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_fault_window_chart")
+                st.plotly_chart(fig, width="stretch", key=f"{key_prefix}_fault_window_chart")
 
         render_fault_cursor_explanation(detection, fault_window)
 
@@ -1190,7 +1260,7 @@ def render_fault_cursor(
 
     ``settings_source_prefix``: when provided (DE compact mode), skip parameter
     widgets and read detection settings directly from this prefix's session_state
-    keys — guaranteeing the DE view always uses the same settings as the
+    keys - guaranteeing the DE view always uses the same settings as the
     dedicated Local/Remote End > Fault Cursor page.
     """
     metadata = st.session_state.get(metadata_key, {}) or {}
@@ -1226,17 +1296,17 @@ def render_fault_cursor(
 def render_fault_cursor_explanation(detection: dict, fault_window: dict):
     """Tampilkan penjelasan mengapa fault cursor berada di titik tersebut."""
     if not detection or not detection.get("detected"):
-        st.info("Fault cursor ditentukan secara manual — tidak ada metadata deteksi otomatis.")
+        st.info("Fault cursor ditentukan secara manual - tidak ada metadata deteksi otomatis.")
         return
 
     _METHOD_LABELS = {
         "legacy_rms":           "RMS Sliding Window (legacy)",
-        "hybrid_superimposed":  "Hybrid — RMS + Superimposed Component",
+        "hybrid_superimposed":  "Hybrid - RMS + Superimposed Component",
     }
     _REF_LABELS = {
         "prefault_rms":         "Pre-fault RMS (kondisi normal sebelum gangguan)",
-        "nominal_vt_assisted":  "Nominal VT (pre-fault tegangan rendah → pakai tegangan nominal)",
-        "nominal_ct_vt_assisted": "Nominal CT/VT (pre-fault arus tinggi → pakai arus nominal)",
+        "nominal_vt_assisted":  "Nominal VT (pre-fault tegangan rendah -> pakai tegangan nominal)",
+        "nominal_ct_vt_assisted": "Nominal CT/VT (pre-fault arus tinggi -> pakai arus nominal)",
     }
 
     method      = detection.get("method", "legacy_rms")
@@ -1257,7 +1327,7 @@ def render_fault_cursor_explanation(detection: dict, fault_window: dict):
             st.dataframe(
                 pd.DataFrame(rows),
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
                 column_config={
                     "Parameter": st.column_config.TextColumn("Parameter", width="medium"),
                     "Nilai": st.column_config.TextColumn("Nilai", width="large"),
@@ -1266,7 +1336,7 @@ def render_fault_cursor_explanation(detection: dict, fault_window: dict):
                 },
             )
 
-        # ── Hasil Deteksi ─────────────────────────────────────────────
+        # Hasil Deteksi
         st.markdown("##### Hasil Deteksi")
         _hasil_rows = [
             {"Parameter": "Waktu Fault Inception", "Nilai": f"{fault_time:.6f} s"},
@@ -1277,11 +1347,11 @@ def render_fault_cursor_explanation(detection: dict, fault_window: dict):
         if detection.get("refine_fault_bar"):
             _hasil_rows.append({
                 "Parameter": "Fault Bar Refinement",
-                "Nilai": f"RMS {detection.get('rms_fault_time', 0.0):.6f} s → diperhalus {fault_time:.6f} s",
+                "Nilai": f"RMS {detection.get('rms_fault_time', 0.0):.6f} s -> diperhalus {fault_time:.6f} s",
             })
         _tbl(_hasil_rows)
 
-        # ── Referensi & Threshold Pickup ──────────────────────────────
+        # Referensi & Threshold Pickup
         st.markdown("##### Referensi Pre-fault dan Threshold Pickup")
         st.caption(f"Mode referensi: {_REF_LABELS.get(ref_mode, ref_mode)}")
         _ref_rows = [
@@ -1290,7 +1360,7 @@ def render_fault_cursor_explanation(detection: dict, fault_window: dict):
             {"Parameter": "Referensi Dipakai",
              "Arus": f"{i_ref:.2f} A", "Tegangan": f"{v_ref / 1000:.3f} kV"},
             {"Parameter": "Threshold Pickup",
-             "Arus": f"{i_pickup:.2f} A  (× 2.0)", "Tegangan": f"{v_pickup / 1000:.3f} kV  (× 0.85)"},
+             "Arus": f"{i_pickup:.2f} A  (x 2.0)", "Tegangan": f"{v_pickup / 1000:.3f} kV  (x 0.85)"},
         ]
         _tbl(_ref_rows)
         st.caption(
@@ -1298,7 +1368,7 @@ def render_fault_cursor_explanation(detection: dict, fault_window: dict):
             "ATAU **tegangan RMS min < tegangan pickup** (kondisi OR)."
         )
 
-        # ── Superimposed (jika aktif) ─────────────────────────────────
+        # Superimposed (jika aktif)
         sup = detection.get("superimposed")
         if sup and sup.get("detected"):
             st.markdown("##### Superimposed Component Detector")
@@ -1307,25 +1377,25 @@ def render_fault_cursor_explanation(detection: dict, fault_window: dict):
                 {"Parameter": "Peak Energy", "Nilai": f"{sup.get('peak_energy', 0.0):.4f}"},
             ])
             st.caption(
-                "Metode superimposed mendeteksi lonjakan energi pada komponen ΔV/ΔI "
+                "Metode superimposed mendeteksi lonjakan energi pada komponen Delta V / Delta I "
                 "(sinyal dikurangi referensi pre-fault siklus sebelumnya). "
-                "Jika lebih awal dari RMS inception dan dalam ±2 siklus, dipakai sebagai inception."
+                "Jika lebih awal dari RMS inception dan dalam +/-2 siklus, dipakai sebagai inception."
             )
 
-        # ── Langkah Penentuan ─────────────────────────────────────────
+        # Langkah Penentuan
         st.markdown("##### Langkah Penentuan")
         steps = [
-            "Hitung RMS sliding 1 siklus untuk Ia, Ib, Ic → ambil maksimum tiga fasa.",
-            "Hitung RMS sliding 1 siklus untuk Va, Vb, Vc → ambil minimum tiga fasa.",
+            "Hitung RMS sliding 1 siklus untuk Ia, Ib, Ic -> ambil maksimum tiga fasa.",
+            "Hitung RMS sliding 1 siklus untuk Va, Vb, Vc -> ambil minimum tiga fasa.",
             "Tentukan referensi pre-fault dari median beberapa siklus pertama.",
-            "Bandingkan dengan threshold: arus naik **× 2.0** atau tegangan turun **× 0.85**.",
+            "Bandingkan dengan threshold: arus naik **x 2.0** atau tegangan turun **x 0.85**.",
             "Indeks pertama yang memenuhi salah satu kondisi = fault inception.",
             "DFT cursor diletakkan **1 siklus setelah** fault inception untuk kalkulasi fasor.",
         ]
         if method == "hybrid_superimposed":
             steps.insert(4,
                 "Deteksi komponen superimposed (selisih sinyal terhadap pre-fault): "
-                "jika lebih awal dari RMS inception dan dalam range ±2 siklus, dipakai sebagai inception."
+                "jika lebih awal dari RMS inception dan dalam range +/-2 siklus, dipakai sebagai inception."
             )
         for i, s in enumerate(steps, 1):
             st.markdown(f"{i}. {s}")
@@ -1333,7 +1403,7 @@ def render_fault_cursor_explanation(detection: dict, fault_window: dict):
         st.caption(
             "DFT cursor (1 siklus setelah inception) menjadi input fasor untuk Single-End, "
             "Double-End, HR Check, dan R-X Locus.  \n"
-            "*Referensi: Saha et al. (2010) Sec. 2.3–2.5; IEEE Std C37.114-2014 Sec. 5.2–5.3; "
+            "*Referensi: Saha et al. (2010) Sec. 2.3-2.5; IEEE Std C37.114-2014 Sec. 5.2-5.3; "
             "Phadke & Thorp (2009) Sec. 3.2 & 9.2; Eriksson, Saha & Rockefeller (1985) Sec. II.*"
         )
 
@@ -1343,11 +1413,11 @@ def render_fault_cursor_explanation(detection: dict, fault_window: dict):
 # ---------------------------------------------------------------------------
 
 def _fmt_c(z: complex, unit: str = "", prec: int = 4) -> str:
-    sign = "+" if z.imag >= 0 else "−"
+    sign = "+" if z.imag >= 0 else "-"
     mag = abs(z)
     angle = float(np.degrees(np.angle(z)))
     u = f" {unit}" if unit else ""
-    return f"{z.real:.{prec}f} {sign} j{abs(z.imag):.{prec}f}{u}  (|{mag:.{prec}f}| ∠ {angle:.2f}°)"
+    return f"{z.real:.{prec}f} {sign} j{abs(z.imag):.{prec}f}{u}  (|{mag:.{prec}f}| angle {angle:.2f} deg)"
 
 
 _SE_LOOP_LATEX = {
@@ -1382,9 +1452,9 @@ def render_se_formula_expander(result: dict, line_param: dict, key_suffix: str =
         st.latex(loop_latex)
         if is_ground:
             st.caption(
-                "K₀ adalah faktor kompensasi earth return: K₀ = (Z₀ − Z₁) / Z₁, "
-                "dengan I₀ = Iᴇ / 3. "
-                "Ekuivalen dengan k₀ = (Z₀ − Z₁) / (3Z₁) × Iᴇ pada notasi standar."
+                "K0 adalah faktor kompensasi earth return: K0 = (Z0 - Z1) / Z1, "
+                "dengan I0 = IE / 3. "
+                "Ekuivalen dengan k0 = (Z0 - Z1) / (3Z1) x IE pada notasi standar."
             )
         st.caption("*Referensi: Saha et al. (2010) Eq. 6.3; Phadke & Thorp (2009) Eq. 9.33*")
 
@@ -1394,17 +1464,17 @@ def render_se_formula_expander(result: dict, line_param: dict, key_suffix: str =
         c2.markdown(f"**I_loop** = `{_fmt_c(loop_i, 'A')}`")
         if is_ground:
             c1, c2 = st.columns(2)
-            c1.markdown(f"**K₀** = `{_fmt_c(k0)}`")
-            c2.markdown("*definisi: K₀ = (Z₀ − Z₁) / Z₁*")
+            c1.markdown(f"**K0** = `{_fmt_c(k0)}`")
+            c2.markdown("*definisi: K0 = (Z0 - Z1) / Z1*")
         c1, c2 = st.columns(2)
-        c1.markdown(f"**Z₁/km** = `{_fmt_c(z1, 'Ω/km')}`")
+        c1.markdown(f"**Z1/km** = `{_fmt_c(z1, 'ohm/km')}`")
         c2.markdown(f"**L** = `{L:.6f} km`")
 
         st.markdown("#### 3. Impedansi Tampak (Zapp)")
         st.latex(r"Z_{app} = \frac{U_{loop}}{I_{loop}}")
-        st.markdown(f"= `{_fmt_c(zapp, 'Ω')}`")
+        st.markdown(f"= `{_fmt_c(zapp, 'ohm')}`")
 
-        st.markdown("#### 4. Kalkulasi Jarak — Tiga Metode")
+        st.markdown("#### 4. Kalkulasi Jarak - Tiga Metode")
 
         d_x = result["distance_x_km"]
         st.markdown("**Reactance method** *(default)*:")
@@ -1428,32 +1498,32 @@ def render_se_formula_expander(result: dict, line_param: dict, key_suffix: str =
         st.markdown("**Projection method:**")
         st.latex(r"d_{proj} = \frac{\mathrm{Re}(Z_{app}\cdot\hat{Z}_1^{\,*})}{|Z_1/\mathrm{km}|}")
         st.markdown(f"= **{d_p:.4f} km** ({d_p / L * 100:.2f}%)")
-        st.caption("*Referensi: Saha et al. (2010) Eq. 6.30–6.31*")
+        st.caption("*Referensi: Saha et al. (2010) Eq. 6.30-6.31*")
 
         rec = result["recommended_distance_km"]
         st.info(
-            f"▶ **Metode yang dipakai:** `{method}` → **{rec:.4f} km** "
+            f"**Metode yang dipakai:** `{method}` -> **{rec:.4f} km** "
             f"({rec / L * 100:.2f}%)"
         )
 
         if result.get("used_superimposed_fallback") and result.get("superimposed_distance_x_km") is not None:
-            st.markdown("#### 5. Fallback: Metode Takagi (Kompensasi Rᶠ)")
+            st.markdown("#### 5. Fallback: Metode Takagi (Kompensasi Rf)")
             st.caption(
                 "Digunakan karena hasil conventional keluar batas saluran. "
-                "Metode Takagi mengeliminasi Rᶠ secara eksak tanpa asumsi Rᶠ kecil."
+                "Metode Takagi mengeliminasi Rf secara eksak tanpa asumsi Rf kecil."
             )
             st.latex(
                 r"d_{Takagi} = \frac{\mathrm{Im}(U_{loop}\cdot\Delta I^*)}{\mathrm{Im}(Z_1\cdot I_{loop}\cdot\Delta I^*)}"
             )
             st.caption(
-                "Dasar eliminasi: Im(Rᶠ·|ΔI|²) = 0 karena Rᶠ real dan |ΔI|² real.  "
+                "Dasar eliminasi: Im(Rf*|Delta I|^2) = 0 karena Rf real dan |Delta I|^2 real.  "
                 "*Referensi: Saha et al. (2010) Eq. 6.8; Phadke & Thorp (2009) Eq. 9.36*"
             )
             d_tk = result["superimposed_distance_x_km"]
             st.markdown(f"**Hasil Takagi:** **{d_tk:.4f} km** ({d_tk / L * 100:.2f}%)")
             if result.get("superimposed_Zapp_R") is not None:
                 sup_z = complex(result["superimposed_Zapp_R"], result["superimposed_Zapp_X"])
-                st.markdown(f"**Zapp superimposed (ΔV/ΔI):** `{_fmt_c(sup_z, 'Ω')}`")
+                st.markdown(f"**Zapp superimposed (Delta V / Delta I):** `{_fmt_c(sup_z, 'ohm')}`")
 
 
 def render_hr_formula_expander(hr_result: dict, line_param: dict):
@@ -1485,25 +1555,25 @@ def render_hr_formula_expander(hr_result: dict, line_param: dict):
         st.latex(loop_latex)
         if is_ground:
             st.caption(
-                "K₀ adalah faktor kompensasi earth return: K₀ = (Z₀ − Z₁) / Z₁, "
-                "dengan I₀ = Iᴇ / 3. "
-                "Ekuivalen dengan k₀ = (Z₀ − Z₁) / (3Z₁) × Iᴇ pada notasi standar."
+                "K0 adalah faktor kompensasi earth return: K0 = (Z0 - Z1) / Z1, "
+                "dengan I0 = IE / 3. "
+                "Ekuivalen dengan k0 = (Z0 - Z1) / (3Z1) x IE pada notasi standar."
             )
-        st.markdown(f"**Zapp** = `{_fmt_c(zapp, 'Ω')}`")
+        st.markdown(f"**Zapp** = `{_fmt_c(zapp, 'ohm')}`")
         st.caption("*Referensi: Saha et al. (2010) Eq. 6.3; Phadke & Thorp (2009) Eq. 9.33*")
 
         st.markdown("#### 2. Nilai yang Digunakan")
         c1, c2 = st.columns(2)
-        c1.markdown(f"**Z₁/km** = `{_fmt_c(z1, 'Ω/km')}`")
+        c1.markdown(f"**Z1/km** = `{_fmt_c(z1, 'ohm/km')}`")
         c2.markdown(f"**L** = `{L:.6f} km`")
         if is_ground:
             c1, c2 = st.columns(2)
-            c1.markdown(f"**K₀** = `{_fmt_c(k0)}`")
-            c2.markdown("*definisi: K₀ = (Z₀ − Z₁) / Z₁*")
+            c1.markdown(f"**K0** = `{_fmt_c(k0)}`")
+            c2.markdown("*definisi: K0 = (Z0 - Z1) / Z1*")
 
-        st.markdown("#### 3. Estimasi Jarak — Tiga Metode")
+        st.markdown("#### 3. Estimasi Jarak - Tiga Metode")
         st.caption(
-            "Ketiga metode dibandingkan untuk mendeteksi shift resistif akibat Rᶠ tinggi. "
+            "Ketiga metode dibandingkan untuk mendeteksi shift resistif akibat Rf tinggi. "
             "Pada gangguan resistif, magnitude Zapp membesar sehingga d_|Z| > d_X."
         )
 
@@ -1523,50 +1593,50 @@ def render_hr_formula_expander(hr_result: dict, line_param: dict):
         st.latex(r"d_{proj} = \frac{\mathrm{Re}(Z_{app}\cdot\hat{Z}_1^{\,*})}{|Z_1/\mathrm{km}|}")
         st.markdown(f"= **{d_p:.4f} km** ({d_p / L * 100:.2f}%)")
 
-        flag_div = "⚠ Divergen" if indicators["distance_methods_diverge"] else "✓ Konsisten"
+        flag_div = "Divergen" if indicators["distance_methods_diverge"] else "Konsisten"
         st.markdown(
-            f"**Deviasi antar metode (|Z| vs X):** {dist_dev:.2f}% dari panjang saluran — {flag_div}"
+            f"**Deviasi antar metode (|Z| vs X):** {dist_dev:.2f}% dari panjang saluran - {flag_div}"
         )
-        st.caption("*Referensi: Saha et al. (2010) Eq. 6.2, 6.22, 6.30–6.31*")
+        st.caption("*Referensi: Saha et al. (2010) Eq. 6.2, 6.22, 6.30-6.31*")
 
-        st.markdown("#### 4. Estimasi Tahanan Gangguan (Rᶠ)")
+        st.markdown("#### 4. Estimasi Tahanan Gangguan (Rf)")
         st.latex(r"Z_{line\_est} = d_X \cdot (Z_1/\mathrm{km})")
-        st.markdown(f"= {d_x:.4f} km × `{_fmt_c(z1, 'Ω/km')}` = `{_fmt_c(z_line_est, 'Ω')}`")
+        st.markdown(f"= {d_x:.4f} km x `{_fmt_c(z1, 'ohm/km')}` = `{_fmt_c(z_line_est, 'ohm')}`")
         st.latex(r"R_f = \mathrm{Re}(Z_{app} - Z_{line\_est})")
         st.markdown(
-            f"= Re(`{_fmt_c(zapp, 'Ω')}` − `{_fmt_c(z_line_est, 'Ω')}`)  \n"
-            f"= Re(`{_fmt_c(residual_z, 'Ω')}`) = **{rf_est:.4f} Ω**"
+            f"= Re(`{_fmt_c(zapp, 'ohm')}` - `{_fmt_c(z_line_est, 'ohm')}`)  \n"
+            f"= Re(`{_fmt_c(residual_z, 'ohm')}`) = **{rf_est:.4f} ohm**"
         )
         st.caption(
             "Estimasi ini memakai d_X sebagai referensi jarak saluran. "
-            "Pada Rᶠ besar, komponen R residual akan dominan dan Zapp bergeser ke kanan R-X plane."
+            "Pada Rf besar, komponen R residual akan dominan dan Zapp bergeser ke kanan R-X plane."
         )
 
         st.markdown("#### 5. Deviasi Sudut Impedansi")
         st.latex(r"\Delta\theta = |\angle Z_{app} - \angle Z_1|")
-        flag_ang = "⚠ Melebihi threshold" if indicators["angle_more_resistive"] else "✓ Dalam batas"
+        flag_ang = "Melebihi threshold" if indicators["angle_more_resistive"] else "Dalam batas"
         st.markdown(
-            f"= |{zapp_angle:.2f}° − {z1_angle:.2f}°| = **{angle_dev:.2f}°** — {flag_ang}"
+            f"= |{zapp_angle:.2f} deg - {z1_angle:.2f} deg| = **{angle_dev:.2f} deg** - {flag_ang}"
         )
         st.caption(
-            "Sudut Zapp yang jauh lebih kecil dari sudut Z₁ mengindikasikan komponen resistif "
-            "tambahan — khas gangguan high resistance atau arc resistance."
+            "Sudut Zapp yang jauh lebih kecil dari sudut Z1 mengindikasikan komponen resistif "
+            "tambahan - khas gangguan high resistance atau arc resistance."
         )
 
         st.markdown("#### 6. Logika Deteksi HR")
         st.markdown(
-            "HR terdeteksi jika **Rᶠ ≥ threshold** DAN "
-            "(**deviasi sudut ≥ threshold** ATAU **deviasi jarak antar metode ≥ threshold**):"
+            "HR terdeteksi jika **Rf >= threshold** DAN "
+            "(**deviasi sudut >= threshold** ATAU **deviasi jarak antar metode >= threshold**):"
         )
-        rf_ok = "✓" if indicators["rf_large"] else "✗"
-        ang_ok = "✓" if indicators["angle_more_resistive"] else "✗"
-        div_ok = "✓" if indicators["distance_methods_diverge"] else "✗"
+        rf_ok = "OK" if indicators["rf_large"] else "NO"
+        ang_ok = "OK" if indicators["angle_more_resistive"] else "NO"
+        div_ok = "OK" if indicators["distance_methods_diverge"] else "NO"
         suspected = hr_result["high_resistance_suspected"]
         st.markdown(
-            f"- {rf_ok} Rᶠ_est = **{rf_est:.4f} Ω**\n"
-            f"- {ang_ok} Deviasi sudut = **{angle_dev:.2f}°**\n"
+            f"- {rf_ok} Rf_est = **{rf_est:.4f} ohm**\n"
+            f"- {ang_ok} Deviasi sudut = **{angle_dev:.2f} deg**\n"
             f"- {div_ok} Deviasi jarak antar metode = **{dist_dev:.2f}%**\n\n"
-            f"**Hasil: {'⚠ High Resistance Suspected' if suspected else '✓ Tidak terindikasi HR'}**"
+            f"**Hasil: {'High Resistance Suspected' if suspected else 'Tidak terindikasi HR'}**"
         )
         st.caption("*Referensi: Saha et al. (2010) Ch. 6; IEEE Std C37.114-2014 Sec. 6.3*")
 

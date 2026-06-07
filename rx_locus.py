@@ -73,7 +73,7 @@ def parse_distance_setting_number(value):
 def normalize_distance_setting_column(name: str):
     text = str(name or "").lower().strip()
     text = re.sub(r"\s+", "", text)
-    for old in ["(", ")", "-", "_", "/", "\\", ".", "ohm", "Ω", "Î©"]:
+    for old in ["(", ")", "-", "_", "/", "\\", ".", "ohm", "Ω", "\u00ce\u00a9"]:
         text = text.replace(old, "")
     return text
 

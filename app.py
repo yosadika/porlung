@@ -10,9 +10,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import streamlit.components.v1 as components
 
-from signal_assignment import apply_signal_assignment
+from signal_assignment import apply_signal_assignment, get_cached_signal_assignment
 from fault_detection import (
     detect_fault_inception,
     build_fault_window,
@@ -127,6 +126,7 @@ from app_runtime import (
     read_google_spreadsheet_query_cached,
     get_google_spreadsheet_sheet_names_cached,
     install_print_friendly_tables,
+    install_restored_widget_default_guard,
 )
 
 
@@ -437,7 +437,7 @@ def render_fault_weather_lightning_summary(tower_df: pd.DataFrame, key_prefix: s
     if hasattr(st, "html"):
         st.html(weather_html)
     else:
-        components.html(weather_html, height=760, scrolling=False)
+        st.markdown(weather_html, unsafe_allow_html=True)
 
 
 def _load_page_icon():
@@ -449,7 +449,7 @@ def _load_page_icon():
             return Image.open(_icon_path)
     except Exception:
         pass
-    return "⚡"
+    return "?"
 
 st.set_page_config(
     page_title="Transmission Fault Locator",
@@ -579,77 +579,58 @@ st.markdown(
 )
 
 install_print_friendly_tables()
+install_restored_widget_default_guard()
 
-# Accordion sidebar: JS client-side — tutup semua expander lain saat satu dibuka
-import streamlit.components.v1 as _stc
-_stc.html("""
-<script>
-(function () {
-    function setup() {
-        var sb = window.parent.document.querySelector('[data-testid="stSidebar"]');
-        if (!sb) { setTimeout(setup, 300); return; }
 
-        function bind() {
-            sb.querySelectorAll('details').forEach(function (det) {
-                var summary = det.querySelector('summary');
-                if (!summary || summary._acc) return;
-                summary._acc = true;
-                summary.addEventListener('click', function () {
-                    if (!det.open) {
-                        sb.querySelectorAll('details[open]').forEach(function (other) {
-                            if (other !== det) {
-                                    var s = other.querySelector('summary');
-                                    if (s) s.click();
-                                }
+def install_sidebar_accordion_rules():
+    """Jaga sidebar seperti accordion: saat satu expander dibuka, expander lain ditutup."""
+    st.html(
+        """
+        <script>
+        (function () {
+            function setup() {
+                var sb = window.parent.document.querySelector('[data-testid="stSidebar"]');
+                if (!sb) { setTimeout(setup, 300); return; }
+
+                function bind() {
+                    sb.querySelectorAll('details').forEach(function (det) {
+                        var summary = det.querySelector('summary');
+                        if (!summary || summary._porlungAccordionBound) return;
+                        summary._porlungAccordionBound = true;
+                        summary.addEventListener('click', function () {
+                            if (!det.open) {
+                                sb.querySelectorAll('details[open]').forEach(function (other) {
+                                    if (other !== det) {
+                                        var s = other.querySelector('summary');
+                                        if (s) s.click();
+                                    }
+                                });
+                            }
                         });
-                    }
-                });
-            });
-        }
+                    });
+                }
 
-        bind();
-        new MutationObserver(bind).observe(sb, { childList: true, subtree: true });
-    }
-    setup();
-})();
-</script>
-""", height=0)
+                bind();
+                new MutationObserver(bind).observe(sb, { childList: true, subtree: true });
+            }
+            setup();
+        })();
+        </script>
+        """,
+        width="content",
+        unsafe_allow_javascript=True,
+    )
+
+
+install_sidebar_accordion_rules()
 
 st.title("Transmission Fault Locator")
 
-_local_has_cfg = bool(st.session_state.get("local_cfg_file") is not None or st.session_state.get("case_local_cfg_bytes"))
-_local_has_dat = bool(st.session_state.get("local_dat_file") is not None or st.session_state.get("case_local_dat_bytes"))
-_local_complete = _local_has_cfg and _local_has_dat
 _case_restored = bool(st.session_state.get("_restored_case_hash"))
-_local_from_case = _case_restored and bool(st.session_state.get("case_local_cfg_bytes")) and bool(st.session_state.get("case_local_dat_bytes"))
-with st.sidebar.expander("Upload Local End COMTRADE", expanded=(_local_has_cfg or _local_has_dat) and not _local_complete):
-    if _local_from_case:
-        _lcfg_name = st.session_state.get("case_local_cfg_name", "rekaman lokal")
-        st.success("Rekaman dimuat dari case tersimpan.")
-        st.caption(f"**{_lcfg_name}**")
-        st.caption("Muat ulang case atau unggah file baru untuk mengganti.")
-        cfg_file = None
-        dat_file = None
-    else:
-        cfg_file = st.file_uploader("Local .cfg", type=["cfg"], key="local_cfg_file")
-        dat_file = st.file_uploader("Local .dat", type=["dat"], key="local_dat_file")
-
-_remote_has_cfg = bool(st.session_state.get("remote_cfg_file") is not None or st.session_state.get("case_remote_cfg_bytes"))
-_remote_has_dat = bool(st.session_state.get("remote_dat_file") is not None or st.session_state.get("case_remote_dat_bytes"))
-_remote_complete = _remote_has_cfg and _remote_has_dat
-_remote_from_case = _case_restored and bool(st.session_state.get("case_remote_cfg_bytes")) and bool(st.session_state.get("case_remote_dat_bytes"))
-with st.sidebar.expander("Upload Remote End COMTRADE", expanded=(_remote_has_cfg or _remote_has_dat) and not _remote_complete):
-    if _remote_from_case:
-        _rcfg_name = st.session_state.get("case_remote_cfg_name", "rekaman remote")
-        st.success("Rekaman dimuat dari case tersimpan.")
-        st.caption(f"**{_rcfg_name}**")
-        st.caption("Muat ulang case atau unggah file baru untuk mengganti.")
-        remote_cfg_file = None
-        remote_dat_file = None
-    else:
-        st.caption("Untuk analisis Double-End (opsional).")
-        remote_cfg_file = st.file_uploader("Remote .cfg", type=["cfg"], key="remote_cfg_file")
-        remote_dat_file = st.file_uploader("Remote .dat", type=["dat"], key="remote_dat_file")
+cfg_file = None
+dat_file = None
+remote_cfg_file = None
+remote_dat_file = None
 
 # Auto-load credentials lokal dari folder `credentials/` (gitignored, tidak di-commit)
 # bila belum ada credentials yang dimuat. Mempermudah autentikasi service account
@@ -737,125 +718,170 @@ with st.sidebar.expander("Credentials", expanded=_creds_file_present and not _cr
             apply_runtime_credentials(st.session_state["runtime_credentials"])
     st.caption("Pengaturan lengkap & clear credentials tersedia di tab Setup DB.")
 
-with st.sidebar.expander("Filter GI / Line", expanded=False):
-    _sidebar_db_url = (
-        str(st.session_state.get("database_spreadsheet_url", "") or "").strip()
-        or str(get_config_secret("DATABASE_SPREADSHEET_URL", "") or "").strip()
+_sidebar_db_url = (
+    str(st.session_state.get("database_spreadsheet_url", "") or "").strip()
+    or str(get_config_secret("DATABASE_SPREADSHEET_URL", "") or "").strip()
+)
+_sidebar_line_sheet = st.session_state.get("line_data_sheet_name", "line_impedance")
+_gf_li = pd.DataFrame()
+_gf_ds = pd.DataFrame()
+_c_li_upt = _c_li_ultg = _c_li_seg = None
+_c_ds_upt = _c_ds_ultg = _c_ds_gi = _c_ds_bay = _c_ds_line = None
+_sidebar_filter_error = ""
+
+def _nv(v):
+    """Normalisasi float-integer: '1.0' -> '1', '2.0' -> '2'."""
+    try:
+        f = float(v)
+        if f == int(f):
+            return str(int(f))
+    except (ValueError, TypeError):
+        pass
+    return str(v)
+
+def _sf_vals(df, col):
+    if col is None or col not in df.columns:
+        return []
+    vals = df[col].dropna().astype(str).str.strip()
+    return sorted(
+        {_nv(v) for v in vals if v and v.lower() not in ("nan", "none")},
+        key=str.upper,
     )
-    _sidebar_line_sheet = st.session_state.get("line_data_sheet_name", "line_impedance")
+
+def _active(v):
+    return bool(v) and v != "Semua" and not str(v).startswith("Pilih ")
+
+def _filt(df, col, val):
+    if not _active(val) or not col or col not in df.columns:
+        return df
+    norm = _nv(val)
+    return df[df[col].astype(str).str.strip().apply(_nv) == norm]
+
+def _sidebar_select(label, real_vals, key):
+    placeholder = f"Pilih {label}"
+    options = [placeholder] + list(real_vals)
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = placeholder
+    return st.selectbox(label, options, key=key)
+
+def _bay_line_opts(df, bay_col, line_col):
+    """Bangun opsi gabungan 'BAY / LINE' dari dataframe."""
+    if not bay_col or not line_col or bay_col not in df.columns or line_col not in df.columns:
+        return []
+    d = df[[bay_col, line_col]].dropna().astype(str)
+    d = d[~d[bay_col].str.strip().str.lower().isin(("nan", "none"))]
+    combined = d[bay_col].str.strip() + " / " + d[line_col].str.strip().apply(_nv)
+    return sorted(set(combined), key=str.upper)
+
+def _parse_bay_line(val):
+    """Uraikan 'BAY / LINE' -> (bay, line). Gunakan rsplit agar nama bay yang mengandung '/' aman."""
+    if not _active(val):
+        return "", ""
+    parts = val.rsplit(" / ", 1)
+    return parts[0], (parts[1] if len(parts) > 1 else "")
+
+def _render_end_filter(end_label, key_suffix, include_segment=False):
     if not _sidebar_db_url:
-        st.caption("Isi Database Spreadsheet URL di Setup DB untuk mengaktifkan filter.")
+        return
+    if _sidebar_filter_error:
+        st.caption(f"Filter GI belum dapat dimuat: {_sidebar_filter_error}")
+        return
+
+    upt_key = f"sidebar_filter_upt_{key_suffix}"
+    ultg_key = f"sidebar_filter_ultg_{key_suffix}"
+    gi_key = f"sidebar_filter_gi_{key_suffix}"
+    bay_line_key = f"sidebar_filter_bay_line_{key_suffix}"
+
+    if key_suffix == "local":
+        if upt_key not in st.session_state and _active(st.session_state.get("sidebar_filter_upt", "")):
+            st.session_state[upt_key] = st.session_state["sidebar_filter_upt"]
+        if ultg_key not in st.session_state and _active(st.session_state.get("sidebar_filter_ultg", "")):
+            st.session_state[ultg_key] = st.session_state["sidebar_filter_ultg"]
+
+    selected_upt = _sidebar_select(f"UPT {end_label}", _sf_vals(_gf_ds, _c_ds_upt), upt_key)
+    ds_upt_df = _filt(_gf_ds, _c_ds_upt, selected_upt)
+    li_upt_df = _filt(_gf_li, _c_li_upt, selected_upt)
+
+    selected_ultg = _sidebar_select(f"ULTG {end_label}", _sf_vals(ds_upt_df, _c_ds_ultg), ultg_key)
+    ds_ultg_df = _filt(ds_upt_df, _c_ds_ultg, selected_ultg)
+    li_ultg_df = _filt(li_upt_df, _c_li_ultg, selected_ultg)
+
+    if include_segment:
+        _sidebar_select("Segment Lokal", _sf_vals(li_ultg_df, _c_li_seg), "sidebar_filter_segment")
+
+    selected_gi = _sidebar_select(f"GI {end_label}", _sf_vals(ds_ultg_df, _c_ds_gi), gi_key)
+    ds_gi_df = _filt(ds_ultg_df, _c_ds_gi, selected_gi)
+
+    selected_bay_line = _sidebar_select(
+        f"Bay / Line {end_label}",
+        _bay_line_opts(ds_gi_df, _c_ds_bay, _c_ds_line),
+        bay_line_key,
+    )
+    selected_bay, selected_line = _parse_bay_line(selected_bay_line)
+    st.session_state[f"sidebar_filter_bay_{key_suffix}"] = selected_bay
+    st.session_state[f"sidebar_filter_line_{key_suffix}"] = selected_line
+
+    if key_suffix == "local":
+        st.session_state["sidebar_filter_upt"] = selected_upt
+        st.session_state["sidebar_filter_ultg"] = selected_ultg
+
+if _sidebar_db_url:
+    try:
+        _gf_li = read_google_spreadsheet_table_cached(_sidebar_db_url, _sidebar_line_sheet)
+        _gf_li = make_streamlit_safe_columns(_gf_li)
+        _c_li_upt = find_column(_gf_li, ["UPT"])
+        _c_li_ultg = find_column(_gf_li, ["ULTG"])
+        _c_li_seg = find_column(_gf_li, ["SEGMENT"])
+
+        _ds_sheet = st.session_state.get("distance_settings_sheet_name", "distance_settings")
+        _gf_ds = read_google_spreadsheet_table_cached(_sidebar_db_url, _ds_sheet)
+        _gf_ds = make_streamlit_safe_columns(_gf_ds)
+        _c_ds_upt = find_column(_gf_ds, ["UPT"])
+        _c_ds_ultg = find_column(_gf_ds, ["ULTG"])
+        _c_ds_gi = find_column(_gf_ds, ["GI"])
+        _c_ds_bay = find_column(_gf_ds, ["BAY", "BAY PHT"])
+        _c_ds_line = find_column(_gf_ds, ["LINE"])
+    except Exception as _sidebar_gi_err:
+        _sidebar_filter_error = str(_sidebar_gi_err)
+
+_sidebar_filter_section_visible = bool(_sidebar_db_url)
+
+_local_has_cfg = bool(st.session_state.get("local_cfg_file") is not None or st.session_state.get("case_local_cfg_bytes"))
+_local_has_dat = bool(st.session_state.get("local_dat_file") is not None or st.session_state.get("case_local_dat_bytes"))
+_local_complete = _local_has_cfg and _local_has_dat
+_local_from_case = _case_restored and bool(st.session_state.get("case_local_cfg_bytes")) and bool(st.session_state.get("case_local_dat_bytes"))
+with st.sidebar.expander("Upload Local End COMTRADE", expanded=(_local_has_cfg or _local_has_dat)):
+    if _sidebar_filter_section_visible:
+        st.caption("Filter Local End")
+        _render_end_filter("Lokal", "local", include_segment=True)
+        st.divider()
+    if _local_from_case:
+        _lcfg_name = st.session_state.get("case_local_cfg_name", "rekaman lokal")
+        st.success("Rekaman dimuat dari case tersimpan.")
+        st.caption(f"**{_lcfg_name}**")
+        st.caption("Muat ulang case atau unggah file baru untuk mengganti.")
     else:
-        try:
-            # Segment → dari line_impedance
-            _gf_li = read_google_spreadsheet_table_cached(_sidebar_db_url, _sidebar_line_sheet)
-            _gf_li = make_streamlit_safe_columns(_gf_li)
-            _c_li_upt  = find_column(_gf_li, ["UPT"])
-            _c_li_ultg = find_column(_gf_li, ["ULTG"])
-            _c_li_seg  = find_column(_gf_li, ["SEGMENT"])
+        cfg_file = st.file_uploader("Local .cfg", type=["cfg"], key="local_cfg_file")
+        dat_file = st.file_uploader("Local .dat", type=["dat"], key="local_dat_file")
 
-            # UPT, ULTG, GI, Bay, Line → dari distance_settings
-            _ds_sheet = st.session_state.get("distance_settings_sheet_name", "distance_settings")
-            _gf_ds = read_google_spreadsheet_table_cached(_sidebar_db_url, _ds_sheet)
-            _gf_ds = make_streamlit_safe_columns(_gf_ds)
-            _c_ds_upt  = find_column(_gf_ds, ["UPT"])
-            _c_ds_ultg = find_column(_gf_ds, ["ULTG"])
-            _c_ds_gi   = find_column(_gf_ds, ["GI"])
-            _c_ds_bay  = find_column(_gf_ds, ["BAY", "BAY PHT"])
-            _c_ds_line = find_column(_gf_ds, ["LINE"])
-
-            def _nv(v):
-                """Normalisasi float-integer: '1.0'→'1', '2.0'→'2'."""
-                try:
-                    f = float(v)
-                    if f == int(f):
-                        return str(int(f))
-                except (ValueError, TypeError):
-                    pass
-                return str(v)
-
-            def _sf_vals(df, col):
-                if col is None or col not in df.columns:
-                    return []
-                vals = df[col].dropna().astype(str).str.strip()
-                return sorted(
-                    {_nv(v) for v in vals if v and v.lower() not in ("nan", "none")},
-                    key=str.upper,
-                )
-
-            def _sb_select(label, real_vals, key):
-                _ph = f"Pilih {label}"
-                _opts = [_ph] + real_vals
-                _cur = st.session_state.get(key, _ph)
-                if _cur not in _opts:
-                    _cur = _ph
-                return st.selectbox(
-                    label, _opts,
-                    index=_opts.index(_cur),
-                    key=key,
-                    label_visibility="collapsed",
-                )
-
-            def _active(v):
-                return bool(v) and v != "Semua" and not v.startswith("Pilih ")
-
-            def _filt(df, col, val):
-                if not _active(val) or not col or col not in df.columns:
-                    return df
-                norm = _nv(val)
-                return df[df[col].astype(str).str.strip().apply(_nv) == norm]
-
-            # — UPT (dari distance_settings) —
-            _sel_upt  = _sb_select("UPT", _sf_vals(_gf_ds, _c_ds_upt), "sidebar_filter_upt")
-            _gf_li_p  = _filt(_gf_li, _c_li_upt, _sel_upt)
-            _gf_ds_p  = _filt(_gf_ds, _c_ds_upt, _sel_upt)
-
-            # — ULTG (dari distance_settings, difilter UPT) —
-            _sel_ultg = _sb_select("ULTG", _sf_vals(_gf_ds_p, _c_ds_ultg), "sidebar_filter_ultg")
-            _gf_li_u  = _filt(_gf_li_p, _c_li_ultg, _sel_ultg)
-            _gf_ds_u  = _filt(_gf_ds_p, _c_ds_ultg, _sel_ultg)
-
-            # — Segment (dari line_impedance, difilter UPT → ULTG) —
-            _sb_select("Segment", _sf_vals(_gf_li_u, _c_li_seg), "sidebar_filter_segment")
-
-            def _bay_line_opts(df, bay_col, line_col):
-                """Bangun opsi gabungan 'BAY / LINE' dari dataframe."""
-                if not bay_col or not line_col or bay_col not in df.columns or line_col not in df.columns:
-                    return []
-                d = df[[bay_col, line_col]].dropna().astype(str)
-                d = d[~d[bay_col].str.strip().str.lower().isin(("nan", "none"))]
-                combined = d[bay_col].str.strip() + " / " + d[line_col].str.strip().apply(_nv)
-                return sorted(set(combined), key=str.upper)
-
-            def _parse_bay_line(val):
-                """Uraikan 'BAY / LINE' → (bay, line). Gunakan rsplit agar nama bay yang mengandung '/' aman."""
-                if not _active(val):
-                    return "", ""
-                parts = val.rsplit(" / ", 1)
-                return parts[0], (parts[1] if len(parts) > 1 else "")
-
-            # — GI Lokal (dari distance_settings, difilter ULTG) —
-            _sel_gi_l = _sb_select("GI Lokal", _sf_vals(_gf_ds_u, _c_ds_gi), "sidebar_filter_gi_local")
-            _gf_ds_gl = _filt(_gf_ds_u, _c_ds_gi, _sel_gi_l)
-
-            # — Bay / Line GI Lokal (gabungan, difilter GI Lokal) —
-            _sel_bl_l = _sb_select("Bay / Line GI Lokal", _bay_line_opts(_gf_ds_gl, _c_ds_bay, _c_ds_line), "sidebar_filter_bay_line_local")
-            _bay_l, _line_l = _parse_bay_line(_sel_bl_l)
-            st.session_state["sidebar_filter_bay_local"]  = _bay_l
-            st.session_state["sidebar_filter_line_local"] = _line_l
-
-            # — GI Remote (dari distance_settings, difilter ULTG) —
-            _sel_gi_r = _sb_select("GI Remote", _sf_vals(_gf_ds_u, _c_ds_gi), "sidebar_filter_gi_remote")
-            _gf_ds_gr = _filt(_gf_ds_u, _c_ds_gi, _sel_gi_r)
-
-            # — Bay / Line GI Remote (gabungan, difilter GI Remote) —
-            _sel_bl_r = _sb_select("Bay / Line GI Remote", _bay_line_opts(_gf_ds_gr, _c_ds_bay, _c_ds_line), "sidebar_filter_bay_line_remote")
-            _bay_r, _line_r = _parse_bay_line(_sel_bl_r)
-            st.session_state["sidebar_filter_bay_remote"]  = _bay_r
-            st.session_state["sidebar_filter_line_remote"] = _line_r
-
-        except Exception as _sidebar_gi_err:
-            st.caption(f"Filter GI belum dapat dimuat: {_sidebar_gi_err}")
+_remote_has_cfg = bool(st.session_state.get("remote_cfg_file") is not None or st.session_state.get("case_remote_cfg_bytes"))
+_remote_has_dat = bool(st.session_state.get("remote_dat_file") is not None or st.session_state.get("case_remote_dat_bytes"))
+_remote_complete = _remote_has_cfg and _remote_has_dat
+_remote_from_case = _case_restored and bool(st.session_state.get("case_remote_cfg_bytes")) and bool(st.session_state.get("case_remote_dat_bytes"))
+with st.sidebar.expander("Upload Remote End COMTRADE", expanded=(_remote_has_cfg or _remote_has_dat)):
+    if _sidebar_filter_section_visible:
+        st.caption("Filter Remote End")
+        _render_end_filter("Remote", "remote", include_segment=False)
+        st.divider()
+    if _remote_from_case:
+        _rcfg_name = st.session_state.get("case_remote_cfg_name", "rekaman remote")
+        st.success("Rekaman dimuat dari case tersimpan.")
+        st.caption(f"**{_rcfg_name}**")
+        st.caption("Muat ulang case atau unggah file baru untuk mengganti.")
+    else:
+        st.caption("Untuk analisis Double-End (opsional).")
+        remote_cfg_file = st.file_uploader("Remote .cfg", type=["cfg"], key="remote_cfg_file")
+        remote_dat_file = st.file_uploader("Remote .dat", type=["dat"], key="remote_dat_file")
 
 # Sinkronisasi sidebar filters ke Tower Schedule, R-X Locus, dan Line Parameter
 def _sb_ia(v):
@@ -903,7 +929,7 @@ if _sb_save_url and "line_param" in st.session_state:
     _sb_line_name = st.session_state.get("line_param", {}).get("line_name", "") or "case"
     _sb_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", _sb_line_name).strip("_") or "case"
     _sb_case_name = f"porlungcase_{_sb_slug}"
-    if st.sidebar.button("Simpan Case ke Cloud", key="sidebar_save_case_cloud_btn", use_container_width=True):
+    if st.sidebar.button("Simpan Case ke Cloud", key="sidebar_save_case_cloud_btn", width="stretch"):
         _sb_sc_ok, _sb_sc_msg = save_case_to_cloud(_sb_save_url, _sb_case_name)
         if _sb_sc_ok:
             st.session_state.pop("_saved_cases_cache", None)
@@ -968,7 +994,7 @@ if cfg_file is None or dat_file is None:
             "estimasi penyebab gangguan, serta grafik SE/DE."
         )
 
-        # ── Muat Case Tersimpan dari Spreadsheet ────────────────────────────
+        # -- Muat Case Tersimpan dari Spreadsheet ----------------------------
         _lp_cloud_url = st.session_state.get("database_spreadsheet_url", "")
         if _lp_cloud_url:
             st.divider()
@@ -982,7 +1008,7 @@ if cfg_file is None or dat_file is None:
             _lp_cloud_cases = st.session_state["_saved_cases_cache"]
             if not _lp_cloud_cases:
                 st.caption("Belum ada case tersimpan.")
-                if st.button("↻ Muat Ulang Daftar", key="reload_landing_saved_cases", use_container_width=False):
+                if st.button("\u21bb Muat Ulang Daftar", key="reload_landing_saved_cases", width="content"):
                     st.session_state.pop("_saved_cases_cache", None)
                     st.rerun()
             else:
@@ -994,9 +1020,9 @@ if cfg_file is None or dat_file is None:
                 )
                 _lp_b1, _lp_b2 = st.columns([4, 1])
                 with _lp_b1:
-                    _lp_do_load = st.button("Muat Case Terpilih", key="landing_load_case_cloud_btn", use_container_width=True)
+                    _lp_do_load = st.button("Muat Case Terpilih", key="landing_load_case_cloud_btn", width="stretch")
                 with _lp_b2:
-                    if st.button("↻", key="reload_landing_saved_cases", help="Muat ulang daftar", use_container_width=True):
+                    if st.button("\u21bb Muat Ulang Daftar", key="reload_landing_saved_cases", help="Muat ulang daftar case tersimpan", width="stretch"):
                         st.session_state.pop("_saved_cases_cache", None)
                         st.rerun()
                 if _lp_do_load:
@@ -1142,9 +1168,9 @@ with tab_remote:
             st.write("Analog Channels:")
             st.write(remote_metadata.get("analog_channels", []))
             with st.expander("Remote Analog Metadata dari .cfg"):
-                st.dataframe(pd.DataFrame(remote_metadata.get("analog_metadata", [])), use_container_width=True)
+                st.dataframe(pd.DataFrame(remote_metadata.get("analog_metadata", [])), width="stretch")
             st.subheader("Preview Data Original Remote")
-            st.dataframe(remote_df.head(20), use_container_width=True)
+            st.dataframe(remote_df.head(20), width="stretch")
 
     with remote_tab_signals:
         st.markdown("### Remote Signal Assignment")
@@ -1154,7 +1180,7 @@ with tab_remote:
             with st.expander("Remote Auto Signal Assignment Preview", expanded=False):
                 st.dataframe(
                     build_auto_assignment_summary(remote_auto_assignment, remote_auto_transformer_data, remote_metadata),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             remote_channel_options = [col for col in remote_df.columns if col != "time"]
@@ -1166,155 +1192,209 @@ with tab_remote:
             def get_remote_ground_index(channel_name, options):
                 return options.index(channel_name) if channel_name in options else 0
 
-            col_rv1, col_rv2, col_rv3 = st.columns(3)
-            with col_rv1:
-                remote_va_channel = st.selectbox(
-                    "Remote Va / VL1",
-                    remote_channel_options,
-                    index=get_remote_channel_index(remote_auto_assignment.get("Va"), remote_channel_options, 0),
-                    key="remote_va_channel",
-                )
-            with col_rv2:
-                remote_vb_channel = st.selectbox(
-                    "Remote Vb / VL2",
-                    remote_channel_options,
-                    index=get_remote_channel_index(remote_auto_assignment.get("Vb"), remote_channel_options, 1 if len(remote_channel_options) > 1 else 0),
-                    key="remote_vb_channel",
-                )
-            with col_rv3:
-                remote_vc_channel = st.selectbox(
-                    "Remote Vc / VL3",
-                    remote_channel_options,
-                    index=get_remote_channel_index(remote_auto_assignment.get("Vc"), remote_channel_options, 2 if len(remote_channel_options) > 2 else 0),
-                    key="remote_vc_channel",
+            def seed_remote_choice(key, options, preferred, fallback_index=0):
+                if st.session_state.get(key) not in options:
+                    fallback_index = min(max(int(fallback_index), 0), max(len(options) - 1, 0))
+                    st.session_state[key] = preferred if preferred in options else options[fallback_index]
+
+            def seed_remote_value(key, value):
+                if key not in st.session_state:
+                    st.session_state[key] = value
+
+            seed_remote_choice("remote_va_channel", remote_channel_options, remote_auto_assignment.get("Va"), 0)
+            seed_remote_choice("remote_vb_channel", remote_channel_options, remote_auto_assignment.get("Vb"), 1 if len(remote_channel_options) > 1 else 0)
+            seed_remote_choice("remote_vc_channel", remote_channel_options, remote_auto_assignment.get("Vc"), 2 if len(remote_channel_options) > 2 else 0)
+            seed_remote_choice("remote_ia_channel", remote_channel_options, remote_auto_assignment.get("Ia"), 3 if len(remote_channel_options) > 3 else 0)
+            seed_remote_choice("remote_ib_channel", remote_channel_options, remote_auto_assignment.get("Ib"), 4 if len(remote_channel_options) > 4 else 0)
+            seed_remote_choice("remote_ic_channel", remote_channel_options, remote_auto_assignment.get("Ic"), 5 if len(remote_channel_options) > 5 else 0)
+            seed_remote_choice("remote_ie_channel", remote_ground_options, remote_auto_assignment.get("IE"), 0)
+            seed_remote_choice("remote_recorded_side", ["secondary", "primary"], remote_auto_recorded_side, 0)
+            seed_remote_value("remote_ct_primary", float(remote_auto_transformer_data.get("ct_primary", 800.0)))
+            seed_remote_value("remote_ct_secondary", float(remote_auto_transformer_data.get("ct_secondary", 1.0)))
+            seed_remote_value("remote_vt_primary", float(remote_auto_transformer_data.get("vt_primary", 150000.0)))
+            seed_remote_value("remote_vt_secondary", float(remote_auto_transformer_data.get("vt_secondary", 100.0)))
+
+            with st.form("remote_signal_assignment_form"):
+                col_rv1, col_rv2, col_rv3 = st.columns(3)
+                with col_rv1:
+                    remote_va_channel = st.selectbox(
+                        "Remote Va / VL1",
+                        remote_channel_options,
+                        key="remote_va_channel",
+                    )
+                with col_rv2:
+                    remote_vb_channel = st.selectbox(
+                        "Remote Vb / VL2",
+                        remote_channel_options,
+                        key="remote_vb_channel",
+                    )
+                with col_rv3:
+                    remote_vc_channel = st.selectbox(
+                        "Remote Vc / VL3",
+                        remote_channel_options,
+                        key="remote_vc_channel",
+                    )
+
+                col_ri1, col_ri2, col_ri3 = st.columns(3)
+                with col_ri1:
+                    remote_ia_channel = st.selectbox(
+                        "Remote Ia / IL1",
+                        remote_channel_options,
+                        key="remote_ia_channel",
+                    )
+                with col_ri2:
+                    remote_ib_channel = st.selectbox(
+                        "Remote Ib / IL2",
+                        remote_channel_options,
+                        key="remote_ib_channel",
+                    )
+                with col_ri3:
+                    remote_ic_channel = st.selectbox(
+                        "Remote Ic / IL3",
+                        remote_channel_options,
+                        key="remote_ic_channel",
+                    )
+
+                remote_ie_channel = st.selectbox(
+                    "Remote IE / IN / 3I0 jika tersedia",
+                    remote_ground_options,
+                    key="remote_ie_channel",
                 )
 
-            col_ri1, col_ri2, col_ri3 = st.columns(3)
-            with col_ri1:
-                remote_ia_channel = st.selectbox(
-                    "Remote Ia / IL1",
-                    remote_channel_options,
-                    index=get_remote_channel_index(remote_auto_assignment.get("Ia"), remote_channel_options, 3 if len(remote_channel_options) > 3 else 0),
-                    key="remote_ia_channel",
+                st.markdown("### Koreksi Polaritas Remote")
+                st.caption(
+                    "Aktifkan bila polaritas VT atau CT remote terpasang terbalik pada perekam. "
+                    "Perubahan diterapkan setelah tombol Apply ditekan."
                 )
-            with col_ri2:
-                remote_ib_channel = st.selectbox(
-                    "Remote Ib / IL2",
-                    remote_channel_options,
-                    index=get_remote_channel_index(remote_auto_assignment.get("Ib"), remote_channel_options, 4 if len(remote_channel_options) > 4 else 0),
-                    key="remote_ib_channel",
-                )
-            with col_ri3:
-                remote_ic_channel = st.selectbox(
-                    "Remote Ic / IL3",
-                    remote_channel_options,
-                    index=get_remote_channel_index(remote_auto_assignment.get("Ic"), remote_channel_options, 5 if len(remote_channel_options) > 5 else 0),
-                    key="remote_ic_channel",
+                col_rpol1, col_rpol2 = st.columns(2)
+                with col_rpol1:
+                    remote_invert_voltage = st.checkbox(
+                        "Balik Polaritas Tegangan Remote (Va, Vb, Vc) x -1",
+                        key="remote_invert_voltage",
+                    )
+                with col_rpol2:
+                    remote_invert_current = st.checkbox(
+                        "Balik Polaritas Arus Remote (Ia, Ib, Ic, IE) x -1",
+                        key="remote_invert_current",
+                    )
+
+                st.markdown("### Remote End Transformer Data")
+                remote_recorded_side_options = ["secondary", "primary"]
+                remote_recorded_side = st.radio(
+                    "Nilai remote COMTRADE direkam sebagai:",
+                    remote_recorded_side_options,
+                    horizontal=True,
+                    key="remote_recorded_side",
                 )
 
-            remote_ie_channel = st.selectbox(
-                "Remote IE / IN / 3I0 jika tersedia",
-                remote_ground_options,
-                index=get_remote_ground_index(remote_auto_assignment.get("IE"), remote_ground_options),
-                key="remote_ie_channel",
-            )
+                col_rct1, col_rct2, col_rvt1, col_rvt2 = st.columns(4)
+                with col_rct1:
+                    remote_ct_primary = st.number_input(
+                        "Remote CT Primary (A)",
+                        min_value=0.001,
+                        step=0.001,
+                        format="%.5f",
+                        key="remote_ct_primary",
+                    )
+                with col_rct2:
+                    remote_ct_secondary = st.number_input(
+                        "Remote CT Secondary (A)",
+                        min_value=0.001,
+                        step=0.001,
+                        format="%.5f",
+                        key="remote_ct_secondary",
+                    )
+                with col_rvt1:
+                    remote_vt_primary = st.number_input(
+                        "Remote VT Primary (V)",
+                        min_value=0.001,
+                        step=0.001,
+                        format="%.5f",
+                        key="remote_vt_primary",
+                    )
+                with col_rvt2:
+                    remote_vt_secondary = st.number_input(
+                        "Remote VT Secondary (V)",
+                        min_value=0.001,
+                        step=0.001,
+                        format="%.5f",
+                        key="remote_vt_secondary",
+                    )
 
-            st.markdown("### Koreksi Polaritas Remote")
-            st.caption("Aktifkan bila polaritas VT atau CT remote terpasang terbalik pada perekam. Berlaku untuk semua channel pada grup tersebut.")
-            col_rpol1, col_rpol2 = st.columns(2)
-            with col_rpol1:
-                remote_invert_voltage = st.checkbox("Balik Polaritas Tegangan Remote (Va, Vb, Vc) ×−1", key="remote_invert_voltage")
-            with col_rpol2:
-                remote_invert_current = st.checkbox("Balik Polaritas Arus Remote (Ia, Ib, Ic, IE) ×−1", key="remote_invert_current")
-
-            st.markdown("### Remote End Transformer Data")
-            remote_recorded_side_options = ["secondary", "primary"]
-            remote_recorded_side_default_index = (
-                remote_recorded_side_options.index(remote_auto_recorded_side)
-                if remote_auto_recorded_side in remote_recorded_side_options
-                else 0
-            )
-            remote_recorded_side = st.radio(
-                "Nilai remote COMTRADE direkam sebagai:",
-                remote_recorded_side_options,
-                index=remote_recorded_side_default_index,
-                horizontal=True,
-                key="remote_recorded_side",
-            )
-
-            col_rct1, col_rct2, col_rvt1, col_rvt2 = st.columns(4)
-            with col_rct1:
-                remote_ct_primary = st.number_input(
-                    "Remote CT Primary (A)",
-                    value=float(remote_auto_transformer_data.get("ct_primary", 800.0)),
-                    min_value=0.001,
-                    step=0.001,
-                    format="%.5f",
-                    key="remote_ct_primary",
-                )
-            with col_rct2:
-                remote_ct_secondary = st.number_input(
-                    "Remote CT Secondary (A)",
-                    value=float(remote_auto_transformer_data.get("ct_secondary", 1.0)),
-                    min_value=0.001,
-                    step=0.001,
-                    format="%.5f",
-                    key="remote_ct_secondary",
-                )
-            with col_rvt1:
-                remote_vt_primary = st.number_input(
-                    "Remote VT Primary (V)",
-                    value=float(remote_auto_transformer_data.get("vt_primary", 150000.0)),
-                    min_value=0.001,
-                    step=0.001,
-                    format="%.5f",
-                    key="remote_vt_primary",
-                )
-            with col_rvt2:
-                remote_vt_secondary = st.number_input(
-                    "Remote VT Secondary (V)",
-                    value=float(remote_auto_transformer_data.get("vt_secondary", 100.0)),
-                    min_value=0.001,
-                    step=0.001,
-                    format="%.5f",
-                    key="remote_vt_secondary",
+                remote_apply_clicked = st.form_submit_button(
+                    "Apply Remote Signal Assignment",
+                    width="stretch",
                 )
 
-            remote_assigned_df = apply_signal_assignment(
-                df=remote_df,
-                va_channel=remote_va_channel,
-                vb_channel=remote_vb_channel,
-                vc_channel=remote_vc_channel,
-                ia_channel=remote_ia_channel,
-                ib_channel=remote_ib_channel,
-                ic_channel=remote_ic_channel,
-                ie_channel=remote_ie_channel,
-                recorded_side=remote_recorded_side,
-                ct_primary=remote_ct_primary,
-                ct_secondary=remote_ct_secondary,
-                vt_primary=remote_vt_primary,
-                vt_secondary=remote_vt_secondary,
-                invert_voltage=remote_invert_voltage,
-                invert_current=remote_invert_current,
-            )
-            st.session_state["remote_assigned_df"] = remote_assigned_df
-            st.session_state["remote_transformer_data"] = {
-                "recorded_side": remote_recorded_side,
-                "ct_primary": remote_ct_primary,
-                "ct_secondary": remote_ct_secondary,
-                "vt_primary": remote_vt_primary,
-                "vt_secondary": remote_vt_secondary,
-                "invert_voltage": remote_invert_voltage,
-                "invert_current": remote_invert_current,
-                "nominal_phase_voltage_rms": remote_vt_primary / math.sqrt(3.0),
-                "nominal_current_rms": remote_ct_primary,
-            }
-            st.session_state["remote_ie_selected_channel"] = remote_ie_channel if remote_ie_channel != "None" else None
-            st.session_state["remote_ie_source"] = (
-                "measured" if remote_ie_channel != "None" else "calculated_from_3_phase_currents"
-            )
-            st.success("Remote signal assignment berhasil dibuat.")
-            st.dataframe(remote_assigned_df.head(20), use_container_width=True)
+            remote_selected_assignment_channels = [
+                remote_va_channel,
+                remote_vb_channel,
+                remote_vc_channel,
+                remote_ia_channel,
+                remote_ib_channel,
+                remote_ic_channel,
+            ]
+            remote_duplicate_channels = [
+                ch for ch in remote_selected_assignment_channels
+                if remote_selected_assignment_channels.count(ch) > 1
+            ]
+            if remote_duplicate_channels:
+                st.error(
+                    "Ada channel remote yang dipilih lebih dari satu kali pada Va/Vb/Vc/Ia/Ib/Ic: "
+                    + ", ".join(sorted(set(remote_duplicate_channels)))
+                    + ". Periksa kembali Remote Signal Assignment."
+                )
+            else:
+                remote_should_apply = remote_apply_clicked or "remote_assigned_df" not in st.session_state
+                if remote_should_apply:
+                    remote_assigned_df, remote_rebuilt = get_cached_signal_assignment(
+                        "remote_signal_assignment_cache_key",
+                        "remote_assigned_df",
+                        remote_df,
+                        va_channel=remote_va_channel,
+                        vb_channel=remote_vb_channel,
+                        vc_channel=remote_vc_channel,
+                        ia_channel=remote_ia_channel,
+                        ib_channel=remote_ib_channel,
+                        ic_channel=remote_ic_channel,
+                        ie_channel=remote_ie_channel,
+                        recorded_side=remote_recorded_side,
+                        ct_primary=remote_ct_primary,
+                        ct_secondary=remote_ct_secondary,
+                        vt_primary=remote_vt_primary,
+                        vt_secondary=remote_vt_secondary,
+                        invert_voltage=remote_invert_voltage,
+                        invert_current=remote_invert_current,
+                    )
+                    st.session_state["remote_transformer_data"] = {
+                        "recorded_side": remote_recorded_side,
+                        "ct_primary": remote_ct_primary,
+                        "ct_secondary": remote_ct_secondary,
+                        "vt_primary": remote_vt_primary,
+                        "vt_secondary": remote_vt_secondary,
+                        "invert_voltage": remote_invert_voltage,
+                        "invert_current": remote_invert_current,
+                        "nominal_phase_voltage_rms": remote_vt_primary / math.sqrt(3.0),
+                        "nominal_current_rms": remote_ct_primary,
+                    }
+                    st.session_state["remote_ie_selected_channel"] = remote_ie_channel if remote_ie_channel != "None" else None
+                    st.session_state["remote_ie_source"] = (
+                        "measured" if remote_ie_channel != "None" else "calculated_from_3_phase_currents"
+                    )
+                    st.success(
+                        "Remote signal assignment berhasil diterapkan."
+                        if remote_rebuilt
+                        else "Remote signal assignment memakai cache."
+                    )
+                else:
+                    remote_assigned_df = st.session_state.get("remote_assigned_df")
+                    st.caption(
+                        "Perubahan form remote belum diterapkan. Tekan Apply Remote Signal Assignment "
+                        "untuk memperbarui waveform dan hasil downstream."
+                    )
+
+                if remote_assigned_df is not None:
+                    st.dataframe(remote_assigned_df.head(20), width="stretch")
 
     with remote_tab_waveform:
         st.markdown("### Remote Waveform")
@@ -1365,7 +1445,7 @@ with tab_remote:
                                 "Peak/RMS": "{:.3f}",
                             }
                         ),
-                        use_container_width=True,
+                        width="stretch",
                     )
             if remote_waveform_channels:
                 _rw_td = st.session_state.get("remote_transformer_data") or {}
@@ -1388,7 +1468,7 @@ with tab_remote:
                 else:
                     remote_assigned_fig, remote_waveform_caption = st.session_state["_rw_fig"]
                 st.caption(remote_waveform_caption)
-                st.plotly_chart(remote_assigned_fig, use_container_width=True)
+                st.plotly_chart(remote_assigned_fig, width="stretch")
 
     with remote_tab_cursor:
         render_fault_cursor(
@@ -1440,7 +1520,7 @@ with tab_remote:
                         "Imag": "{:.4f}",
                     }
                 ),
-                use_container_width=True,
+                width="stretch",
             )
 
     with remote_tab_fault_type:
@@ -1453,16 +1533,26 @@ with tab_remote:
                 remote_phasors,
                 st.session_state.get("remote_prefault_phasors"),
             )
+            if "use_remote_auto_fault_type_thresholds" not in st.session_state:
+                st.session_state["use_remote_auto_fault_type_thresholds"] = True
+            _remote_ft_defaults = {
+                "remote_fault_type_voltage_drop_threshold": 0.80,
+                "remote_fault_type_current_rise_threshold": 1.50,
+                "remote_fault_type_ground_current_threshold": 0.20,
+                "remote_delta_current_threshold": 0.45,
+                "remote_delta_voltage_threshold": 0.01,
+            }
+            for _key, _default in _remote_ft_defaults.items():
+                if _key not in st.session_state:
+                    st.session_state[_key] = _default
             use_remote_auto_fault_type_thresholds = st.toggle(
                 "Gunakan threshold otomatis remote dari kondisi pre-fault",
-                value=True,
                 key="use_remote_auto_fault_type_thresholds",
             )
             col_rftp1, col_rftp2, col_rftp3 = st.columns(3)
             with col_rftp1:
                 remote_fault_type_voltage_drop_threshold = st.number_input(
                     "Remote Fault Type Voltage Drop Threshold",
-                    value=0.80,
                     min_value=0.10,
                     max_value=1.00,
                     step=0.0001,
@@ -1472,7 +1562,6 @@ with tab_remote:
             with col_rftp2:
                 remote_fault_type_current_rise_threshold = st.number_input(
                     "Remote Fault Type Current Rise Threshold",
-                    value=1.50,
                     min_value=1.05,
                     max_value=10.00,
                     step=0.0001,
@@ -1482,7 +1571,6 @@ with tab_remote:
             with col_rftp3:
                 remote_fault_type_ground_current_threshold = st.number_input(
                     "Remote Fault Type Ground Current Threshold",
-                    value=0.20,
                     min_value=0.01,
                     max_value=1.00,
                     step=0.0001,
@@ -1494,7 +1582,6 @@ with tab_remote:
                 with col_rftd1:
                     remote_delta_current_threshold = st.number_input(
                         "Remote Delta Current Dominance Threshold",
-                        value=0.45,
                         min_value=0.05,
                         max_value=1.00,
                         step=0.0001,
@@ -1504,7 +1591,6 @@ with tab_remote:
                 with col_rftd2:
                     remote_delta_voltage_threshold = st.number_input(
                         "Remote Delta Voltage Threshold",
-                        value=0.01,
                         min_value=0.0001,
                         max_value=0.20,
                         step=0.0001,
@@ -1543,7 +1629,7 @@ with tab_remote:
             )
             st.info(explain_fault_type_result(remote_fault_type_result, context="Rekaman remote"))
             with st.expander("Remote Fault Type Detection Detail"):
-                st.dataframe(remote_fault_type_df, use_container_width=True)
+                st.dataframe(remote_fault_type_df, width="stretch")
 
 with tab_summary:
     summary_container = st.container()
@@ -1964,10 +2050,10 @@ with tab0:
             file_name="credentials.template.toml",
             mime="text/plain",
             key="download_runtime_credentials_template",
-            use_container_width=True,
+            width="stretch",
         )
     with _col_cred2:
-        if st.button("Clear Runtime Credentials from Session", key="clear_runtime_credentials", use_container_width=True):
+        if st.button("Clear Runtime Credentials from Session", key="clear_runtime_credentials", width="stretch"):
             for key in [
                 "runtime_credentials",
                 "runtime_credentials_loaded_name",
@@ -2002,9 +2088,10 @@ with tab0:
         "Untuk repo public, jangan hardcode URL private di source code."
     )
 
+    if "database_spreadsheet_url_input" not in st.session_state:
+        st.session_state["database_spreadsheet_url_input"] = st.session_state.get("database_spreadsheet_url", "")
     database_spreadsheet_url = st.text_input(
         "Database Spreadsheet URL",
-        value=st.session_state.get("database_spreadsheet_url", ""),
         key="database_spreadsheet_url_input",
     )
     database_spreadsheet_url = database_spreadsheet_url.strip()
@@ -2042,10 +2129,12 @@ with tab0:
                 key=f"{sheet_key}_select",
             )
         else:
+            _manual_key = f"{sheet_key}_manual"
+            if _manual_key not in st.session_state:
+                st.session_state[_manual_key] = current_sheet
             selected_sheet = st.text_input(
                 label,
-                value=current_sheet,
-                key=f"{sheet_key}_manual",
+                key=_manual_key,
                 help="Klik Refresh Sheets untuk memilih dari daftar sheet yang tersedia.",
             )
 
@@ -2065,7 +2154,7 @@ with tab0:
                         st.session_state["database_spreadsheet_url"],
                         st.session_state[f"{source_key}_sheet_name"],
                     )
-                    st.dataframe(preview_df.head(20), use_container_width=True)
+                    st.dataframe(preview_df.head(20), width="stretch")
                     st.caption(f"Rows: {len(preview_df)}, Columns: {len(preview_df.columns)}")
                 except Exception as e:
                     st.error("Gagal membaca preview spreadsheet.")
@@ -2078,15 +2167,20 @@ with tab0:
     st.caption("Pengaturan sumber data Tower Schedule. Halaman Tower Schedule hanya memakai konfigurasi ini.")
     tower_db_col1, tower_db_col2, tower_db_col3 = st.columns([3, 1.2, 0.8])
     with tower_db_col1:
+        if "tower_schedule_url_setup_input" not in st.session_state:
+            st.session_state["tower_schedule_url_setup_input"] = st.session_state.get("tower_schedule_url", "")
         tower_schedule_url_setup = st.text_input(
             "Tower Schedule Spreadsheet URL",
-            value=st.session_state.get("tower_schedule_url", ""),
             key="tower_schedule_url_setup_input",
         ).strip()
     with tower_db_col2:
+        if "tower_schedule_sheet_setup_input" not in st.session_state:
+            st.session_state["tower_schedule_sheet_setup_input"] = st.session_state.get(
+                "tower_schedule_sheet_name",
+                default_tower_schedule_sheet,
+            )
         tower_schedule_sheet_setup = st.text_input(
             "Tower Schedule Sheet",
-            value=st.session_state.get("tower_schedule_sheet_name", default_tower_schedule_sheet),
             key="tower_schedule_sheet_setup_input",
         ).strip()
     with tower_db_col3:
@@ -2123,17 +2217,17 @@ with tab0:
             file_name=case_filename,
             mime="application/zip",
             key="export_case_zip",
-            use_container_width=True,
+            width="stretch",
         )
     with _col_ref:
         st.button(
-            "↺ Refresh Nama File",
+            "\u21bb Refresh Nama File",
             key="refresh_case_name",
             help="Perbarui nama file ZIP ke waktu terkini. Nama file menggunakan timestamp saat halaman terakhir dimuat — klik tombol ini agar timestamp mencerminkan waktu sekarang sebelum mengekspor.",
-            use_container_width=True,
+            width="stretch",
         )
 
-    # ── Simpan / Muat Case via Spreadsheet (sheet saved_cases) ─────────
+    # -- Simpan / Muat Case via Spreadsheet (sheet saved_cases) ---------
     st.markdown("#### Simpan / Muat Case via Spreadsheet")
     st.caption(
         "Simpan case langsung ke spreadsheet dan muat kembali dari daftar tanpa perlu mengelola file ZIP secara manual."
@@ -2147,13 +2241,13 @@ with tab0:
     else:
         _ccol1, _ccol2 = st.columns(2)
         with _ccol1:
-            if st.button("Simpan Case ke Cloud", key="save_case_cloud_btn", use_container_width=True):
+            if st.button("Simpan Case ke Cloud", key="save_case_cloud_btn", width="stretch"):
                 _sc_ok, _sc_msg = save_case_to_cloud(_cloud_url, _auto_case_name, _cloud_sheet)
                 (st.success if _sc_ok else st.error)(_sc_msg)
                 if _sc_ok:
                     st.session_state.pop("_saved_cases_cache", None)
         with _ccol2:
-            if st.button("↻ Muat Ulang Daftar", key="reload_saved_cases_btn", use_container_width=True):
+            if st.button("\u21bb Muat Ulang Daftar", key="reload_saved_cases_btn", width="stretch"):
                 st.session_state.pop("_saved_cases_cache", None)
 
         _sc_key = f"{_cloud_url}|{_cloud_sheet}"
@@ -2174,7 +2268,7 @@ with tab0:
                 list(_opts.keys()),
                 key="saved_case_select",
             )
-            if st.button("Muat Case Terpilih", key="load_case_cloud_btn", use_container_width=True):
+            if st.button("Muat Case Terpilih", key="load_case_cloud_btn", width="stretch"):
                 _lc_case_id = str(_opts[_sel_label].get("case_id", ""))
                 _lc_ok, _lc_msg = load_case_from_cloud(_cloud_url, _lc_case_id)
                 if _lc_ok:
@@ -2260,7 +2354,36 @@ with tab_tower:
         """Normalisasi untuk matching: lowercase, strip, collapse spasi di sekitar hyphen."""
         return str(s).strip().lower().replace(" - ", "-").replace("- ", "-").replace(" -", "-")
 
-    # Resolve sidebar-synced ULTG: exact match → pakai langsung; normalized match → pakai nilai asli spreadsheet; no match → Semua
+    def _hyphen_filter_aliases(value):
+        """Return exact + common hyphen-spacing aliases, preserving user/spreadsheet spelling."""
+        text = str(value or "").strip()
+        if not text:
+            return []
+        collapsed = re.sub(r"\s*-\s*", "-", text)
+        spaced = re.sub(r"\s*-\s*", " - ", text)
+        compact_spaced = re.sub(r"\s+", " ", spaced).strip()
+        aliases = [text, collapsed, compact_spaced]
+        deduped = []
+        seen = set()
+        for alias in aliases:
+            key = alias.upper()
+            if alias and key not in seen:
+                seen.add(key)
+                deduped.append(alias)
+        return deduped
+
+    def _gquery_eq_any(column_letter, values):
+        clauses = []
+        for value in values:
+            safe = str(value).replace(chr(39), chr(39) + chr(39))
+            clauses.append(f"{column_letter} = '{safe}'")
+        if not clauses:
+            return ""
+        if len(clauses) == 1:
+            return clauses[0]
+        return "(" + " or ".join(clauses) + ")"
+
+    # Resolve sidebar-synced ULTG: exact match -> pakai langsung; normalized match -> pakai nilai asli spreadsheet; no match -> Semua
     _pre_ultg_synced = st.session_state.get("tower_schedule_pre_ultg", "Semua")
     if _sb_ia(_pre_ultg_synced) and _pre_ultg_synced not in pre_ultg_options:
         _matched_ultg = next((o for o in pre_ultg_options if _norm_filter(o) == _norm_filter(_pre_ultg_synced)), None)
@@ -2270,14 +2393,11 @@ with tab_tower:
     with st.expander("Filter Awal Load", expanded=not tower_has_loaded_data):
         pre_filter_col1, pre_filter_col2, pre_filter_col3 = st.columns([1, 1, 1.2])
         with pre_filter_col1:
+            if st.session_state.get("tower_schedule_pre_ultg") not in pre_ultg_options:
+                st.session_state["tower_schedule_pre_ultg"] = "Semua"
             selected_pre_ultg = st.selectbox(
                 "ULTG sebelum load",
                 pre_ultg_options,
-                index=(
-                    pre_ultg_options.index(st.session_state.get("tower_schedule_pre_ultg", "Semua"))
-                    if st.session_state.get("tower_schedule_pre_ultg", "Semua") in pre_ultg_options
-                    else 0
-                ),
                 key="tower_schedule_pre_ultg",
                 help="Isi persis sesuai nilai kolom ULTG agar Google Sheet hanya mengambil baris ULTG tersebut.",
             )
@@ -2293,7 +2413,7 @@ with tab_tower:
         _pre_seg_synced = st.session_state.get("tower_schedule_pre_segment", "Semua")
         if _pre_seg_synced not in pre_segment_options:
             if _sb_ia(_pre_seg_synced):
-                # Resolve: normalized match → pakai nilai asli spreadsheet; no match → Semua
+                # Resolve: normalized match -> pakai nilai asli spreadsheet; no match -> Semua
                 _matched_seg = next((o for o in pre_segment_options if _norm_filter(o) == _norm_filter(_pre_seg_synced)), None)
                 st.session_state["tower_schedule_pre_segment"] = _matched_seg if _matched_seg else "Semua"
             else:
@@ -2303,19 +2423,15 @@ with tab_tower:
             selected_pre_segment = st.selectbox(
                 "Segment sebelum load",
                 pre_segment_options,
-                index=(
-                    pre_segment_options.index(st.session_state.get("tower_schedule_pre_segment", "Semua"))
-                    if st.session_state.get("tower_schedule_pre_segment", "Semua") in pre_segment_options
-                    else 0
-                ),
                 key="tower_schedule_pre_segment",
                 help="Isi persis sesuai nilai kolom SEGMENT agar Google Sheet hanya mengambil baris segment tersebut.",
             )
             tower_pre_segment = "" if selected_pre_segment == "Semua" else selected_pre_segment
         with pre_filter_col3:
+            if "tower_schedule_load_all" not in st.session_state:
+                st.session_state["tower_schedule_load_all"] = False
             tower_load_all = st.checkbox(
                 "Load semua data",
-                value=False,
                 key="tower_schedule_load_all",
                 help="Matikan opsi ini agar load lebih ringan memakai filter awal ULTG/Segment.",
             )
@@ -2343,7 +2459,10 @@ with tab_tower:
             if tower_load_requested or st.session_state.get("tower_schedule_loaded") or "tower_schedule_df" not in st.session_state:
                 tower_where_clauses = []
                 if not tower_load_all and tower_pre_segment:
-                    tower_where_clauses.append(f"F = '{tower_pre_segment.replace(chr(39), chr(39) + chr(39))}'")
+                    segment_aliases = _hyphen_filter_aliases(tower_pre_segment)
+                    segment_clause = _gquery_eq_any("F", segment_aliases)
+                    if segment_clause:
+                        tower_where_clauses.append(segment_clause)
                 if not tower_load_all and tower_pre_ultg:
                     tower_where_clauses.append(f"G = '{tower_pre_ultg.replace(chr(39), chr(39) + chr(39))}'")
                 tower_query = "select *"
@@ -2390,10 +2509,21 @@ with tab_tower:
                 return ["Semua"] + sorted(set(values), key=lambda item: item.upper())
     
             with filter_col1:
+                _segment_options = _tower_options("SEGMENT")
+                _segment_key = "tower_schedule_segment_filter"
+                if st.session_state.get(_segment_key) not in _segment_options:
+                    _matched_segment = next(
+                        (
+                            option for option in _segment_options
+                            if _norm_filter(option) == _norm_filter(st.session_state.get(_segment_key, ""))
+                        ),
+                        None,
+                    )
+                    st.session_state[_segment_key] = _matched_segment or "Semua"
                 selected_segment = st.selectbox(
                     "Segment",
-                    _tower_options("SEGMENT"),
-                    key="tower_schedule_segment_filter",
+                    _segment_options,
+                    key=_segment_key,
                 )
             with filter_col2:
                 selected_ultg = st.selectbox(
@@ -2417,7 +2547,7 @@ with tab_tower:
             filtered_tower_df = tower_df.copy()
             if selected_segment != "Semua" and "SEGMENT" in filtered_tower_df.columns:
                 filtered_tower_df = filtered_tower_df[
-                    filtered_tower_df["SEGMENT"].astype(str).str.strip() == selected_segment
+                    filtered_tower_df["SEGMENT"].astype(str).map(_norm_filter) == _norm_filter(selected_segment)
                 ]
             if selected_ultg != "Semua" and "ULTG" in filtered_tower_df.columns:
                 filtered_tower_df = filtered_tower_df[
@@ -2511,11 +2641,11 @@ with tab_tower:
             if tower_formatters:
                 st.dataframe(
                     display_tower_df.style.format(tower_formatters, na_rep="-"),
-                    use_container_width=True,
+                    width="stretch",
                     height=420,
                 )
             else:
-                st.dataframe(display_tower_df, use_container_width=True, height=420)
+                st.dataframe(display_tower_df, width="stretch", height=420)
     
             if "LATITUDE" in display_tower_df.columns and "LONGITUDE" in display_tower_df.columns:
                 show_tower_map = st.toggle(
@@ -2568,7 +2698,7 @@ with tab1:
         metadata,
     )
 
-    st.dataframe(auto_summary_df, use_container_width=True)
+    st.dataframe(auto_summary_df, width="stretch")
 
     st.subheader("Detected Three-Phase Channel Sets")
 
@@ -2578,14 +2708,14 @@ with tab1:
     if channel_set_df.empty:
         st.warning("Aplikasi belum menemukan kandidat set channel 3 fasa.")
     else:
-        st.dataframe(channel_set_df, use_container_width=True)
+        st.dataframe(channel_set_df, width="stretch")
 
     with st.expander("Detail Analog Metadata dari .cfg"):
         analog_meta_df = pd.DataFrame(metadata.get("analog_metadata", []))
-        st.dataframe(analog_meta_df, use_container_width=True)
+        st.dataframe(analog_meta_df, width="stretch")
 
     st.subheader("Preview Data Original")
-    st.dataframe(df.head(20), use_container_width=True)
+    st.dataframe(df.head(20), width="stretch")
 
 
 with tab2:
@@ -2688,7 +2818,7 @@ with summary_container:
             ),
         },
     ]
-    st.dataframe(pd.DataFrame(status_rows), use_container_width=True)
+    st.dataframe(pd.DataFrame(status_rows), width="stretch")
 
     st.markdown("### Key Results")
     fault_type_summary = st.session_state.get("fault_type_result", {})
@@ -2777,11 +2907,11 @@ with summary_container:
     if summary_operating_status:
         st.markdown("### Status Diagnostik DE")
         _STATUS_LABEL = {
-            "NORMAL_INTERNAL_LINE_FAULT":             "✅  Gangguan internal saluran — hasil DE dapat digunakan",
-            "BACKFEED_OR_REVERSE_FAULT_SUSPECTED":    "⚠️  Backfeed / reverse fault diduga — gangguan mungkin di luar saluran ini",
-            "EXTERNAL_TO_IMPORTED_LINE_SUSPECTED":    "⚠️  Gangguan diduga berasal dari saluran lain yang diimpor",
-            "DE_NOT_APPLICABLE_FOR_IMPORTED_LINE":    "🚫  Hasil DE tidak berlaku — jarak di luar saluran atau rekaman tidak sesuai",
-            "REMOTE_REVERSE_FAULT":                   "⚠️  Arus remote menunjukkan arah reverse — relay remote melihat fault di belakang terminal",
+            "NORMAL_INTERNAL_LINE_FAULT":             "[OK] Gangguan internal saluran - hasil DE dapat digunakan",
+            "BACKFEED_OR_REVERSE_FAULT_SUSPECTED":    "[PERHATIAN] Backfeed / reverse fault diduga - gangguan mungkin di luar saluran ini",
+            "EXTERNAL_TO_IMPORTED_LINE_SUSPECTED":    "[PERHATIAN] Gangguan diduga berasal dari saluran lain yang diimpor",
+            "DE_NOT_APPLICABLE_FOR_IMPORTED_LINE":    "[TIDAK BERLAKU] Hasil DE tidak berlaku - jarak di luar saluran atau rekaman tidak sesuai",
+            "REMOTE_REVERSE_FAULT":                   "[PERHATIAN] Arus remote menunjukkan arah reverse - relay remote melihat fault di belakang terminal",
         }
         _can_use = summary_operating_status.get("can_use_de_distance", True)
         _statuses = summary_operating_status.get("statuses", [])
@@ -2821,7 +2951,7 @@ with summary_container:
                 },
                 na_rep="-",
             ),
-            use_container_width=True,
+            width="stretch",
         )
     else:
         st.info("Selesaikan Fault Cursor dan Phasor di tab Local End untuk melihat tabel ini.")
@@ -2844,7 +2974,7 @@ with summary_container:
                 },
                 na_rep="-",
             ),
-            use_container_width=True,
+            width="stretch",
         )
     else:
         st.info("Selesaikan analisis di tab Remote End untuk melihat tabel ini.")
@@ -2919,7 +3049,7 @@ with summary_container:
                         waveform_title,
                         remote_time_shift_s=summary_remote_shift_s,
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.info(f"Channel {channel_name} belum tersedia untuk grafik {waveform_title}.")
@@ -2977,7 +3107,7 @@ with summary_container:
     if _references:
         st.caption(f"*Referensi: {_references}*")
 
-    # ── Pengumpulan dataset berlabel (jembatan rule → ML) ──────────────
+    # -- Pengumpulan dataset berlabel (jembatan rule -> ML) --------------
     with st.expander("Dataset Penyebab (untuk Pelatihan ML)", expanded=False):
         _ds_sheet_name = st.session_state.get("fault_cause_sheet_name") or "fault_cause"
         st.caption(
@@ -3015,11 +3145,11 @@ with summary_container:
         with st.expander("Lihat feature-vector kasus ini", expanded=False):
             st.dataframe(
                 pd.DataFrame([{"Fitur": k, "Nilai": v} for k, v in _ds_row.items()]),
-                hide_index=True, use_container_width=True,
+                hide_index=True, width="stretch",
             )
         _ds_col1, _ds_col2 = st.columns(2)
         with _ds_col1:
-            if st.button("Tambah ke Google Sheet", key="dataset_append_btn", use_container_width=True):
+            if st.button("Tambah ke Google Sheet", key="dataset_append_btn", width="stretch"):
                 _ds_url = st.session_state.get("database_spreadsheet_url", "")
                 if not _ds_url:
                     st.error("Database Spreadsheet URL belum diisi di Setup DB.")
@@ -3033,16 +3163,26 @@ with summary_container:
             st.download_button(
                 "Unduh Baris (CSV)", data=_ds_csv,
                 file_name=f"fault_cause_row_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv", use_container_width=True, key="dataset_csv_btn",
+                mime="text/csv", width="stretch", key="dataset_csv_btn",
             )
 
     st.markdown("### Grafik SE dan DE")
     _sloc_key = (
-        "v3",  # bump saat label/format figure berubah
+        "v4",  # bump saat label/format/cache dependency figure berubah
+        st.session_state.get("summary_location_cache_version", 0),
         (st.session_state.get("two_ended_result") or {}).get("distance_km"),
+        (st.session_state.get("two_ended_result") or {}).get("distance_from_original_local_km"),
+        (st.session_state.get("two_ended_result") or {}).get("line_length_km_used"),
         (st.session_state.get("two_ended_quality") or {}).get("quality_score"),
+        (st.session_state.get("two_ended_reverse_result") or {}).get("distance_km"),
+        (st.session_state.get("two_ended_reverse_quality") or {}).get("quality_score"),
         (st.session_state.get("single_ended_result") or {}).get("recommended_distance_km"),
+        (st.session_state.get("two_ended_local_single_result") or {}).get("recommended_distance_km"),
+        (st.session_state.get("two_ended_remote_single_result") or {}).get("recommended_distance_km"),
         (st.session_state.get("line_param") or {}).get("length_km"),
+        (st.session_state.get("effective_line_param") or {}).get("length_km"),
+        st.session_state.get("two_ended_local_gi_label"),
+        st.session_state.get("two_ended_remote_gi_label"),
     )
     if st.session_state.get("_sloc_key") != _sloc_key or "summary_location_fig_cached" not in st.session_state:
         summary_location_fig = build_summary_line_position_from_session()
@@ -3053,7 +3193,7 @@ with summary_container:
     if summary_location_fig is not None:
         st.plotly_chart(
             summary_location_fig,
-            use_container_width=True,
+            width="stretch",
             key="summary_two_ended_line_position_fig",
             config={
                 "editable": True,
@@ -3165,7 +3305,7 @@ with summary_container:
         )
         st.plotly_chart(
             fig,
-            use_container_width=True,
+            width="stretch",
             key=f"summary_rx_locus_{end_suffix}",
         )
 
@@ -3245,7 +3385,7 @@ with tab3:
                         "Peak/RMS": "{:.3f}",
                     }
                 ),
-                use_container_width=True,
+                width="stretch",
             )
 
     _lw_freq_plot = float(metadata.get("frequency") or 50.0)
@@ -3270,7 +3410,7 @@ with tab3:
         fig, waveform_caption = st.session_state["_lw_fig"]
     st.caption(waveform_caption)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 with tab4:
@@ -3367,7 +3507,7 @@ with tab5:
                     "Imag": "{:.4f}",
                 }
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
         sequence, sequence_df = calculate_sequence_components(phasors)
@@ -3410,7 +3550,7 @@ with tab5:
                     "Imag": "{:.4f}",
                 }
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
         st.markdown("### Validasi Window DFT pada Waveform")
@@ -3464,7 +3604,7 @@ with tab5:
             legend_title="Signal",
         )
 
-        st.plotly_chart(fig_dft, use_container_width=True)
+        st.plotly_chart(fig_dft, width="stretch")
 
         st.markdown("### Phasor Diagram")
 
@@ -3487,17 +3627,17 @@ with tab5:
         col_v_phasor, col_i_phasor = st.columns(2)
 
         with col_v_phasor:
-            st.plotly_chart(_ph_v, use_container_width=True)
+            st.plotly_chart(_ph_v, width="stretch")
 
         with col_i_phasor:
-            st.plotly_chart(_ph_i, use_container_width=True)
+            st.plotly_chart(_ph_i, width="stretch")
 
         with st.expander("Sequence Component Phasor Diagram"):
             col_seq_v, col_seq_i = st.columns(2)
             with col_seq_v:
-                st.plotly_chart(_ph_sv, use_container_width=True)
+                st.plotly_chart(_ph_sv, width="stretch")
             with col_seq_i:
-                st.plotly_chart(_ph_si, use_container_width=True)
+                st.plotly_chart(_ph_si, width="stretch")
 
     except Exception as e:
         st.error("Perhitungan fasor gagal.")
@@ -3519,9 +3659,10 @@ with tab6:
         phasors,
         st.session_state.get("prefault_phasors"),
     )
+    if "use_auto_fault_type_thresholds" not in st.session_state:
+        st.session_state["use_auto_fault_type_thresholds"] = True
     use_auto_fault_type_thresholds = st.toggle(
         "Gunakan threshold otomatis dari kondisi pre-fault",
-        value=True,
         key="use_auto_fault_type_thresholds",
         help=(
             "Aplikasi menghitung level normal tegangan/arus dari window pre-fault "
@@ -3546,7 +3687,7 @@ with tab6:
             max_value=1.00,
             step=0.0001,
             format="%.5f",
-            help="Fasa dianggap drop jika Vphase <= threshold Ã— Vmax."
+            help="Fasa dianggap drop jika Vphase <= threshold x Vmax."
         )
 
     with col_ft2:
@@ -3557,7 +3698,7 @@ with tab6:
             max_value=10.00,
             step=0.0001,
             format="%.5f",
-            help="Fasa dianggap faulted jika Iphase >= threshold Ã— Imin."
+            help="Fasa dianggap faulted jika Iphase >= threshold x Imin."
         )
 
     with col_ft3:
@@ -3648,14 +3789,14 @@ with tab6:
             build_auto_fault_type_threshold_dataframe(local_auto_fault_settings).style.format(
                 {"Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x}
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.markdown("### Metrik Deteksi")
 
     metrics_df = build_fault_type_metrics_dataframe(fault_type_result)
 
-    st.dataframe(metrics_df, use_container_width=True)
+    st.dataframe(metrics_df, width="stretch")
 
     st.markdown("### Grafik Perbandingan Fasor RMS")
 
@@ -3688,7 +3829,7 @@ with tab6:
         text_auto=".2f",
     )
 
-    st.plotly_chart(fig_vbar, use_container_width=True)
+    st.plotly_chart(fig_vbar, width="stretch")
 
     fig_ibar = px.bar(
         current_bar_df,
@@ -3698,7 +3839,7 @@ with tab6:
         text_auto=".2f",
     )
 
-    st.plotly_chart(fig_ibar, use_container_width=True)
+    st.plotly_chart(fig_ibar, width="stretch")
 
     st.markdown("### Koreksi Manual")
 
@@ -3866,7 +4007,7 @@ def render_high_resistance_check(end_side: str):
             build_high_resistance_dataframe(hr_result).style.format(
                 {"Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x}
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
         st.markdown("### Perbandingan Metode Estimasi Jarak")
@@ -3877,8 +4018,8 @@ def render_high_resistance_check(end_side: str):
                 "Distance %": [hr_result["distance_x_percent"], hr_result["distance_mag_percent"], hr_result["distance_projection_percent"]],
             }
         )
-        st.dataframe(distance_df.style.format({"Distance km": "{:.3f}", "Distance %": "{:.2f}"}), use_container_width=True)
-        st.plotly_chart(px.bar(distance_df, x="Method", y="Distance km", title=f"Perbandingan Estimasi Jarak Gangguan - {ctx['label']}", text_auto=".2f"), use_container_width=True)
+        st.dataframe(distance_df.style.format({"Distance km": "{:.3f}", "Distance %": "{:.2f}"}), width="stretch")
+        st.plotly_chart(px.bar(distance_df, x="Method", y="Distance km", title=f"Perbandingan Estimasi Jarak Gangguan - {ctx['label']}", text_auto=".2f"), width="stretch")
 
         st.markdown("### R-X Position")
         z1_total = ctx["line_param"]["Z1_total"]
@@ -3889,7 +4030,7 @@ def render_high_resistance_check(end_side: str):
         fig_rx.add_shape(type="line", x0=0, y0=0, x1=z_app.real, y1=z_app.imag, line=dict(dash="dash"))
         fig_rx.update_traces(textposition="top center")
         fig_rx.update_layout(xaxis_title="R (ohm)", yaxis_title="X (ohm)")
-        st.plotly_chart(fig_rx, use_container_width=True)
+        st.plotly_chart(fig_rx, width="stretch")
     except Exception as e:
         st.error("Analisis high resistance gagal.")
         st.exception(e)
@@ -4006,7 +4147,7 @@ def render_single_ended_analysis(end_side: str):
     render_se_formula_expander(single_result, line_param)
 
     st.markdown("### Detail Perhitungan")
-    st.dataframe(single_df.style.format({"Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x}), use_container_width=True)
+    st.dataframe(single_df.style.format({"Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x}), width="stretch")
 
     st.markdown("### Perbandingan Metode Jarak")
     distance_df = pd.DataFrame(
@@ -4016,8 +4157,8 @@ def render_single_ended_analysis(end_side: str):
             "Distance %": [single_result["distance_mag_percent"], single_result["distance_x_percent"], single_result["distance_projection_percent"], single_result["recommended_distance_percent"]],
         }
     )
-    st.dataframe(distance_df.style.format({"Distance km": "{:.3f}", "Distance %": "{:.2f}"}), use_container_width=True)
-    st.plotly_chart(px.bar(distance_df, x="Method", y="Distance km", text_auto=".2f", title=f"Perbandingan Estimasi Jarak Single-Ended - {ctx['label']}"), use_container_width=True)
+    st.dataframe(distance_df.style.format({"Distance km": "{:.3f}", "Distance %": "{:.2f}"}), width="stretch")
+    st.plotly_chart(px.bar(distance_df, x="Method", y="Distance km", text_auto=".2f", title=f"Perbandingan Estimasi Jarak Single-Ended - {ctx['label']}"), width="stretch")
 
     st.markdown("### Diagram R-X")
     z1_total = line_param["Z1_total"]
@@ -4036,7 +4177,7 @@ def render_single_ended_analysis(end_side: str):
     fig_rx.add_shape(type="line", x0=0, y0=0, x1=z_recommended_line.real, y1=z_recommended_line.imag, line=dict(dash="dot"))
     fig_rx.update_traces(textposition="top center")
     fig_rx.update_layout(xaxis_title="R (ohm)", yaxis_title="X (ohm)", yaxis=dict(scaleanchor="x", scaleratio=1))
-    st.plotly_chart(fig_rx, use_container_width=True)
+    st.plotly_chart(fig_rx, width="stretch")
 
 
 def render_simple_rx_locus(end_side: str):
@@ -4210,7 +4351,7 @@ def render_simple_rx_locus(end_side: str):
                                     "r_reach_ohm": "{:.3f}",
                                 }
                             ),
-                            use_container_width=True,
+                            width="stretch",
                         )
                     else:
                         st.warning("Baris setting terpilih belum memiliki X reach dan R reach yang cukup untuk Z1/Z2/Z3.")
@@ -4239,7 +4380,7 @@ def render_simple_rx_locus(end_side: str):
     st.session_state[f"rx_locus_summary_fig_{summary_key_suffix}"] = fig_locus
     st.session_state[f"rx_locus_summary_meta_{summary_key_suffix}"] = meta
 
-    st.plotly_chart(fig_locus, use_container_width=True)
+    st.plotly_chart(fig_locus, width="stretch")
     with st.expander("Trajectory Data", expanded=False):
         st.dataframe(
             trajectory_df.style.format(
@@ -4252,7 +4393,7 @@ def render_simple_rx_locus(end_side: str):
                     "Z_angle_deg": "{:.3f}",
                 }
             ),
-            use_container_width=True,
+            width="stretch",
             height=260,
         )
 

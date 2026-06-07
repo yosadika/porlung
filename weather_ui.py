@@ -63,22 +63,22 @@ def weather_symbol_for_code(code):
     try:
         code = int(code)
     except (TypeError, ValueError):
-        return "â˜"
+        return "Cloud"
     if 200 <= code <= 232 or code in THUNDERSTORM_WEATHER_CODES:
-        return "âš¡"
+        return "Storm"
     if 300 <= code <= 321:
-        return "â˜‚"
+        return "Rain"
     if 500 <= code <= 531:
-        return "â˜”"
+        return "Drizzle"
     if 600 <= code <= 622:
-        return "â„"
+        return "Snow"
     if 700 <= code <= 781:
-        return "â‰‹"
+        return "Fog"
     if code == 800 or code in {0, 1}:
-        return "â˜€"
+        return "Clear"
     if code in {801, 2}:
-        return "â›…"
-    return "â˜"
+        return "Partly Cloudy"
+    return "Cloud"
 
 
 def build_weather_trend_svg(items):

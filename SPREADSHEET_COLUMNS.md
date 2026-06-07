@@ -237,23 +237,29 @@ Kolom-kolom ini tidak ditampilkan sebagai kolom tabel biasa, melainkan dirangkum
 
 ---
 
-## 3. Sidebar Filter — Session State Keys
+## 3. Upload End Filter — Session State Keys
 
-Filter sidebar membaca nilai dari kedua spreadsheet di atas untuk mengisi dropdown bertingkat.
+Filter GI/line berada di sidebar, tetapi dikelompokkan di expander upload rekaman Local End dan Remote End. Segment hanya dipilih di Local End agar satu segment menjadi konteks line/tower, sementara UPT/ULTG local dan remote boleh berbeda.
 
 | Key | Sumber Kolom | Sheet | Keterangan |
 |---|---|---|---|
-| `sidebar_filter_upt` | `UPT` | `distance_settings` | Level 0: filter UPT (unit) |
-| `sidebar_filter_ultg` | `ULTG` | `distance_settings` | Level 1: filter ULTG (sub-unit, difilter UPT) |
-| `sidebar_filter_segment` | `SEGMENT` | `line_impedance` | Level 2: filter Segment (difilter UPT→ULTG) |
-| `sidebar_filter_gi_local` | `GI` | `distance_settings` | Level 3: GI lokal |
-| `sidebar_filter_bay_local` | `BAY` | `distance_settings` | Level 4: Bay lokal |
-| `sidebar_filter_line_local` | `LINE` | `distance_settings` | Level 5: Line lokal |
-| `sidebar_filter_gi_remote` | `GI` | `distance_settings` | Level 6: GI remote |
-| `sidebar_filter_bay_remote` | `BAY` | `distance_settings` | Level 7: Bay remote |
-| `sidebar_filter_line_remote` | `LINE` | `distance_settings` | Level 8: Line remote |
+| `sidebar_filter_upt_local` | `UPT` | `distance_settings` | UPT Local End |
+| `sidebar_filter_ultg_local` | `ULTG` | `distance_settings` | ULTG Local End, difilter UPT local |
+| `sidebar_filter_segment` | `SEGMENT` | `line_impedance` | Segment Local End, difilter UPT/ULTG local |
+| `sidebar_filter_gi_local` | `GI` | `distance_settings` | GI Local End |
+| `sidebar_filter_bay_line_local` | `BAY` + `LINE` | `distance_settings` | Pilihan gabungan Bay/Line Local End |
+| `sidebar_filter_bay_local` | `BAY` | `distance_settings` | Bay Local End hasil parse dari `sidebar_filter_bay_line_local` |
+| `sidebar_filter_line_local` | `LINE` | `distance_settings` | Line Local End hasil parse dari `sidebar_filter_bay_line_local` |
+| `sidebar_filter_upt_remote` | `UPT` | `distance_settings` | UPT Remote End |
+| `sidebar_filter_ultg_remote` | `ULTG` | `distance_settings` | ULTG Remote End, difilter UPT remote |
+| `sidebar_filter_gi_remote` | `GI` | `distance_settings` | GI Remote End |
+| `sidebar_filter_bay_line_remote` | `BAY` + `LINE` | `distance_settings` | Pilihan gabungan Bay/Line Remote End |
+| `sidebar_filter_bay_remote` | `BAY` | `distance_settings` | Bay Remote End hasil parse dari `sidebar_filter_bay_line_remote` |
+| `sidebar_filter_line_remote` | `LINE` | `distance_settings` | Line Remote End hasil parse dari `sidebar_filter_bay_line_remote` |
+| `sidebar_filter_upt` | `UPT` | `distance_settings` | Legacy alias dari `sidebar_filter_upt_local` |
+| `sidebar_filter_ultg` | `ULTG` | `distance_settings` | Legacy alias dari `sidebar_filter_ultg_local` |
 
-> **Perubahan v1.0.30:** ULTG sebelumnya diambil dari `line_impedance`; sekarang diambil dari `distance_settings` agar hierarki UPT→ULTG konsisten. UPT ditambahkan sebagai level tertinggi (level 0) di atas ULTG.
+> **Perubahan v1.0.30+:** ULTG diambil dari `distance_settings` agar hierarki UPT→ULTG konsisten. Filter Local/Remote End sekarang punya UPT/ULTG masing-masing untuk mengakomodir GI local dan GI remote yang berada di UPT/ULTG berbeda.
 
 ---
 

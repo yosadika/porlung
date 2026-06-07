@@ -1,7 +1,9 @@
 import os
 import tempfile
+from functools import wraps
 from urllib.parse import quote
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -87,16 +89,54 @@ def install_print_friendly_tables():
         adjusted_df.index.name = df.index.name or "No"
         return adjusted_df
 
+    def _arrow_safe_dataframe(df):
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return df
+
+        safe_df = df.copy()
+        for column in safe_df.columns:
+            series = safe_df[column]
+            if not pd.api.types.is_object_dtype(series):
+                continue
+
+            non_null = series.dropna()
+            if non_null.empty:
+                continue
+
+            type_names = {
+                type(value).__name__
+                for value in non_null.iloc[: min(len(non_null), 100)].tolist()
+            }
+            if len(type_names) <= 1 and type_names <= {"str"}:
+                continue
+
+            def _stringify(value):
+                if value is None:
+                    return ""
+                try:
+                    if pd.isna(value):
+                        return ""
+                except (TypeError, ValueError):
+                    pass
+                if isinstance(value, (np.generic,)):
+                    value = value.item()
+                if isinstance(value, complex):
+                    return f"{value.real:.6g} + j{value.imag:.6g}"
+                return str(value)
+
+            safe_df[column] = series.map(_stringify)
+        return safe_df
+
     def _one_based_display_data(data):
         if type(data).__name__ == "Styler" and hasattr(data, "data"):
             source_df = data.data
-            adjusted_df = _one_based_index(source_df)
-            if adjusted_df is not source_df:
-                data.data.index = adjusted_df.index
+            safe_df = _arrow_safe_dataframe(source_df)
+            adjusted_df = _one_based_index(safe_df)
+            data.data = adjusted_df
             return data
 
         if isinstance(data, pd.DataFrame):
-            return _one_based_index(data)
+            return _one_based_index(_arrow_safe_dataframe(data))
 
         return data
 
@@ -117,6 +157,8 @@ def install_print_friendly_tables():
             return None, None
 
     def printable_dataframe(data=None, *args, **kwargs):
+        if "use_container_width" in kwargs and "width" not in kwargs:
+            kwargs["width"] = "stretch" if kwargs.pop("use_container_width") else "content"
         display_data = _one_based_display_data(data)
         result = original_dataframe(display_data, *args, **kwargs)
         source_df, table_html = _table_source(display_data)
@@ -143,3 +185,58 @@ def install_print_friendly_tables():
 
     st.dataframe = printable_dataframe
     st._print_tables_installed = True
+
+
+def install_restored_widget_default_guard():
+    """
+    Avoid Streamlit's "default value + Session State API" warning after case restore.
+
+    Case restore intentionally restores widget keys so forms reopen with the saved
+    selections. For restored keys, Streamlit wants the widget to be created with
+    key= only; passing value/index/default at the same time emits noisy warnings.
+    """
+
+    if getattr(st, "_restored_widget_default_guard_installed", False):
+        return
+
+    default_arg_by_widget = {
+        "text_input": "value",
+        "number_input": "value",
+        "checkbox": "value",
+        "toggle": "value",
+        "slider": "value",
+        "select_slider": "value",
+        "date_input": "value",
+        "time_input": "value",
+        "color_picker": "value",
+        "radio": "index",
+        "selectbox": "index",
+        "multiselect": "default",
+    }
+
+    def _guard_wrapper(original_widget, default_arg):
+        @wraps(original_widget)
+        def guarded_widget(*args, **kwargs):
+            key = kwargs.get("key")
+            if key is not None and key in st.session_state and default_arg in kwargs:
+                kwargs.pop(default_arg, None)
+            return original_widget(*args, **kwargs)
+
+        return guarded_widget
+
+    for widget_name, default_arg in default_arg_by_widget.items():
+        original_widget = getattr(st, widget_name, None)
+        if original_widget is not None:
+            setattr(st, widget_name, _guard_wrapper(original_widget, default_arg))
+
+    try:
+        from streamlit.delta_generator import DeltaGenerator
+
+        for widget_name, default_arg in default_arg_by_widget.items():
+            original_method = getattr(DeltaGenerator, widget_name, None)
+            if original_method is not None:
+                setattr(DeltaGenerator, widget_name, _guard_wrapper(original_method, default_arg))
+    except Exception:
+        pass
+
+    st._restored_widget_default_guard_installed = True

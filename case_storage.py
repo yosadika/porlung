@@ -37,6 +37,7 @@ CASE_FILE_KEYS = {
 }
 
 CASE_STATE_EXCLUDE_PREFIXES = (
+    "FormSubmitter:",
     "local_cfg_file",
     "local_dat_file",
     "remote_cfg_file",
@@ -83,6 +84,7 @@ _WIDGET_RESTORE_CLEANUP_KEYS = frozenset({
 # Prefix widget keys yang tidak boleh di-restore (button, download_button, dll.)
 # Semua prefix ini aman karena tidak ada state key yang valid diawali nama-nama ini.
 _WIDGET_RESTORE_CLEANUP_PREFIXES = (
+    "FormSubmitter:",
     "download_",
     "clear_",
     "refresh_",

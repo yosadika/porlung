@@ -1,4 +1,4 @@
-import math
+﻿import math
 
 import pandas as pd
 import streamlit as st
@@ -154,7 +154,7 @@ def render():
                         "Jika spreadsheet tidak memiliki panjang saluran, aplikasi memakai nilai fallback."
                     )
                 st.markdown(f"#### {database_preview_title}")
-                st.dataframe(conductor_df, use_container_width=True, height=300)
+                st.dataframe(conductor_df, width="stretch", height=300)
                 st.markdown("#### Kolom yang Terdeteksi Otomatis")
                 st.json(detected_columns)
 
@@ -282,7 +282,7 @@ def render():
                         f"Line Remote={_f_line_r}" if _ia(_f_line_r) else None,
                     ]
                     st.info(
-                        "Filter sidebar aktif — "
+                        "Filter sidebar aktif - "
                         + ", ".join(x for x in _active_parts if x)
                         + f". {len(conductor_df)} baris tersedia. "
                         "Ubah di expander Filter GI / Line pada sidebar."
@@ -772,7 +772,7 @@ def render():
         format_func=lambda v: {
             "line_parameter": f"Line Parameter ({float(line_length):.5f} {length_unit})",
             "tower_schedule": (
-                f"Tower Schedule ({float(_tower_length_km):.6f} km — {_tower_length_source})"
+                f"Tower Schedule ({float(_tower_length_km):.6f} km - {_tower_length_source})"
                 if _tower_length_km is not None
                 else "Tower Schedule belum tersedia"
             ),
@@ -784,7 +784,7 @@ def render():
         st.info(
             f"Setelah Normalize, panjang efektif yang dipakai: "
             f"**{float(_tower_length_km):.6f} km** (Tower Schedule). "
-            "Z1_total/Z0_total = Z1_per_km/Z0_per_km × panjang Tower Schedule."
+            "Z1_total/Z0_total = Z1_per_km/Z0_per_km x panjang Tower Schedule."
         )
     elif _tower_length_km is None:
         st.caption(
@@ -832,7 +832,7 @@ def render():
             )
             if _sel_now == "tower_schedule" and _tkm_now is not None:
                 _eff = override_line_param_length(
-                    line_param, float(_tkm_now), f"Tower Schedule — {_tsrc_now}"
+                    line_param, float(_tkm_now), f"Tower Schedule - {_tsrc_now}"
                 )
             else:
                 _eff = dict(line_param)
@@ -876,7 +876,7 @@ def render():
                     "Angle Deg": lambda x: "" if pd.isna(x) else f"{x:.2f}",
                 }
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
         st.markdown("### Ringkasan untuk Perhitungan Jarak Gangguan")
@@ -894,4 +894,3 @@ def render():
             """,
             language="text",
         )
-

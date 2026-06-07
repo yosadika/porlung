@@ -1,4 +1,4 @@
-import math
+﻿import math
 import cmath
 import pandas as pd
 import plotly.graph_objects as go
@@ -185,7 +185,7 @@ def render():
                 f"Local {phasor_plot_group} Phasors",
                 line_color="#2563eb",
             ),
-            use_container_width=True,
+            width="stretch",
         )
     with col_phasor_remote:
         st.plotly_chart(
@@ -195,7 +195,7 @@ def render():
                 f"Remote {phasor_plot_group} Phasors",
                 line_color="#ff00ff",
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.markdown("### Synchronization Check")
@@ -217,7 +217,7 @@ def render():
 
         col_sync1, col_sync2, col_sync3 = st.columns(3)
 
-        col_sync1.metric("Î” Fault Time", f"{delta_fault_time:.6f} s")
+        col_sync1.metric("Delta Fault Time", f"{delta_fault_time:.6f} s")
         col_sync2.metric("1 Cycle Time", f"{one_cycle_time:.6f} s")
         col_sync3.metric(
             "Trigger Sync Check",
@@ -272,10 +272,17 @@ def render():
         if not sync_default_channels:
             sync_default_channels = [ch for ch in ["Va", "Vb", "Vc"] if ch in sync_plot_channels]
 
+        _sync_current = st.session_state.get("sync_fault_waveform_channels")
+        if isinstance(_sync_current, (list, tuple)):
+            _sync_filtered = [ch for ch in _sync_current if ch in sync_plot_channels]
+        else:
+            _sync_filtered = []
+        st.session_state["sync_fault_waveform_channels"] = (
+            _sync_filtered or sync_default_channels or sync_plot_channels[:3]
+        )
         sync_selected_channels = st.multiselect(
             "Pilih sinyal untuk grafik sinkronisasi local-remote",
             sync_plot_channels,
-            default=sync_default_channels or sync_plot_channels[:3],
             key="sync_fault_waveform_channels",
         )
 
@@ -454,7 +461,7 @@ def render():
                 )
                 st.session_state["_de_sync_fig_key"] = _sync_fig_key
                 st.session_state["_de_sync_fig"] = sync_fig
-            st.plotly_chart(sync_fig, use_container_width=True)
+            st.plotly_chart(sync_fig, width="stretch")
 
             apply_sync_to_de = st.checkbox(
                 "Gunakan alignment waveform ini untuk cursor DFT remote pada perhitungan DE",
@@ -568,7 +575,7 @@ def render():
         else:
             _vs_label, _vs_status = "Terbalik / Tidak Sinkron", "error"
 
-        _shift_str = f"{_vs_shift:+.4f} s" if _vs_shift is not None else "—"
+        _shift_str = f"{_vs_shift:+.4f} s" if _vs_shift is not None else "-"
         st.caption(
             f"Visual Sync Score: korelasi Pearson instantaneous {_vs_ch} ({_N} siklus di sekitar DFT cursor). "
             f"Waveform Sync Score: korelasi envelope/superimposed dari metode alignment yang dipilih."
@@ -576,24 +583,24 @@ def render():
         _m1, _m2, _m3, _m4, _m5 = st.columns(5)
         _m1.metric("DE Remote DFT Time", f"{_r_dft_time:.6f} s")
         _m2.metric("DE Remote DFT Index", _r_aligned_idx)
-        _m3.metric("Waveform Sync Score", f"{_wf_sync_score:.3f}" if _wf_sync_score is not None else "—")
+        _m3.metric("Waveform Sync Score", f"{_wf_sync_score:.3f}" if _wf_sync_score is not None else "-")
         _m4.metric("Visual Sync Score", f"{_inst_corr:.3f}")
         _m5.metric("Sync Status", _vs_label)
 
         if _vs_status == "success":
             st.success(
-                f"Rekaman tersinkron secara visual — {_vs_ch}, score {_inst_corr:.3f} "
+                f"Rekaman tersinkron secara visual - {_vs_ch}, score {_inst_corr:.3f} "
                 f"(shift remote: {_shift_str}). Waveform kedua end beroverlap dengan baik."
             )
         elif _vs_status == "warning":
             st.warning(
-                f"Sinkronisasi cukup — {_vs_ch}, score {_inst_corr:.3f} "
+                f"Sinkronisasi cukup - {_vs_ch}, score {_inst_corr:.3f} "
                 f"(shift remote: {_shift_str}). Verifikasi alignment sebelum menggunakan hasil DE."
             )
         else:
             _hint = " Cek kemungkinan polaritas VT remote terbalik." if _inst_corr < 0 else ""
             st.error(
-                f"Sinkronisasi lemah — {_vs_ch}, score {_inst_corr:.3f}.{_hint} "
+                f"Sinkronisasi lemah - {_vs_ch}, score {_inst_corr:.3f}.{_hint} "
                 "Coba ubah referensi atau metode alignment, atau gunakan angle search pada kalkulasi DE."
             )
     except Exception as _vse:
@@ -914,6 +921,11 @@ def render():
                 scenario=two_ended_fault_scenario,
             )
             st.session_state.pop("two_ended_line_position_fig", None)
+            st.session_state.pop("summary_location_fig_cached", None)
+            st.session_state.pop("_sloc_key", None)
+            st.session_state["summary_location_cache_version"] = (
+                int(st.session_state.get("summary_location_cache_version", 0) or 0) + 1
+            )
             st.success("Two-ended fault location berhasil dihitung.")
 
             if single_ended_compare_error:
@@ -971,11 +983,11 @@ def render():
         if operating_status:
             st.markdown("### Status Diagnostik Rekaman")
             _STATUS_LABEL = {
-                "NORMAL_INTERNAL_LINE_FAULT":          "✅  Gangguan internal saluran — hasil DE dapat digunakan",
-                "BACKFEED_OR_REVERSE_FAULT_SUSPECTED": "⚠️  Backfeed / reverse fault diduga — gangguan mungkin di luar saluran ini",
-                "EXTERNAL_TO_IMPORTED_LINE_SUSPECTED": "⚠️  Gangguan diduga berasal dari saluran lain yang diimpor",
-                "DE_NOT_APPLICABLE_FOR_IMPORTED_LINE": "🚫  Hasil DE tidak berlaku — jarak di luar saluran atau rekaman tidak sesuai",
-                "REMOTE_REVERSE_FAULT":                "⚠️  Arus remote menunjukkan arah reverse — relay remote melihat fault di belakang terminal",
+                "NORMAL_INTERNAL_LINE_FAULT":          "[OK] Gangguan internal saluran - hasil DE dapat digunakan",
+                "BACKFEED_OR_REVERSE_FAULT_SUSPECTED": "[PERHATIAN] Backfeed / reverse fault diduga - gangguan mungkin di luar saluran ini",
+                "EXTERNAL_TO_IMPORTED_LINE_SUSPECTED": "[PERHATIAN] Gangguan diduga berasal dari saluran lain yang diimpor",
+                "DE_NOT_APPLICABLE_FOR_IMPORTED_LINE": "[TIDAK BERLAKU] Hasil DE tidak berlaku - jarak di luar saluran atau rekaman tidak sesuai",
+                "REMOTE_REVERSE_FAULT":                "[PERHATIAN] Arus remote menunjukkan arah reverse - relay remote melihat fault di belakang terminal",
             }
             _can_use = operating_status.get("can_use_de_distance", True)
             _statuses = operating_status.get("statuses", [])
@@ -1010,7 +1022,7 @@ def render():
                         "Imag Distance km": "{:.6f}",
                     }
                 ),
-                use_container_width=True,
+                width="stretch",
             )
 
         two_result_df = build_two_ended_result_dataframe(two_result, two_quality)
@@ -1024,7 +1036,7 @@ def render():
                         "Value": lambda x: f"{x:.6f}" if isinstance(x, (int, float)) else x
                     }
                 ),
-                use_container_width=True,
+                width="stretch",
             )
 
         if two_reverse_result and two_reverse_quality:
@@ -1041,7 +1053,7 @@ def render():
                             else x
                         }
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         if st.session_state.get("two_ended_single_ended_error"):
@@ -1159,7 +1171,7 @@ def render():
                         "Rf Est ohm": "{:.6f}",
                     }
                 ),
-                use_container_width=True,
+                width="stretch",
             )
 
             with st.expander("Detail Single-Ended Local GI"):
@@ -1171,7 +1183,7 @@ def render():
                             else x
                         }
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             with st.expander("Detail Single-Ended Remote GI"):
@@ -1183,7 +1195,7 @@ def render():
                             else x
                         }
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             if local_single_result["warnings"] or remote_single_result["warnings"]:
@@ -1200,9 +1212,9 @@ def render():
                 st.warning(f"Remote GI single-ended comparison: {warning}")
 
         if two_quality["warnings"]:
-            st.markdown("### Perhatian — Hasil Perlu Diverifikasi")
+            st.markdown("### Perhatian - Hasil Perlu Diverifikasi")
             for warning in two_quality["warnings"]:
-                st.warning(f"⚠️ {warning}")
+                st.warning(f"Perhatian: {warning}")
 
         st.markdown("### Line Position Visualization")
 
@@ -1629,7 +1641,7 @@ def render():
             col=1,
         )
 
-        st.plotly_chart(fig_two, use_container_width=True, config={
+        st.plotly_chart(fig_two, width="stretch", config={
             "editable": True,
             "edits": {
                 "annotationPosition": True,
@@ -1683,7 +1695,7 @@ def render():
                         }
                     )
 
-            st.dataframe(pd.DataFrame(candidate_rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(candidate_rows), width="stretch")
 
         if "two_ended_dft_sync_candidates" in st.session_state:
             with st.expander("Auto-Sync Remote DFT Candidates", expanded=False):
@@ -1717,7 +1729,7 @@ def render():
                         },
                         na_rep="-",
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         st.markdown("### Optional Time-Based / TWS Fault Locator")
@@ -1815,7 +1827,7 @@ def render():
                     tws_detail_df.style.format(
                         {"Value": lambda x: f"{x:.9f}" if isinstance(x, (int, float)) else x}
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
                 if tws_result["warnings"]:
@@ -1830,11 +1842,11 @@ def render():
 # ---------------------------------------------------------------------------
 
 def _fmt_c_de(z: complex, unit: str = "", prec: int = 4) -> str:
-    sign = "+" if z.imag >= 0 else "−"
+    sign = "+" if z.imag >= 0 else "-"
     mag = abs(z)
     angle = math.degrees(cmath.phase(z))
     u = f" {unit}" if unit else ""
-    return f"{z.real:.{prec}f} {sign} j{abs(z.imag):.{prec}f}{u}  (|{mag:.{prec}f}| ∠ {angle:.2f}°)"
+    return f"{z.real:.{prec}f} {sign} j{abs(z.imag):.{prec}f}{u}  (|{mag:.{prec}f}| angle {angle:.2f} deg)"
 
 
 def render_de_formula_expander(result: dict, quality: dict, line_param: dict):
@@ -1872,8 +1884,8 @@ def render_de_formula_expander(result: dict, quality: dict, line_param: dict):
             r"{Z_1\cdot(I_{1L} + I_{1R})}"
         )
         st.caption(
-            "Z₁ di sini adalah Z₁/km (impedansi per kilometer). "
-            "Rᶠ tereliminasi karena sistem dua persamaan dari dua ujung — "
+            "Z1 di sini adalah Z1/km (impedansi per kilometer). "
+            "Rf tereliminasi karena sistem dua persamaan dari dua ujung - "
             "jarak diambil dari bagian real hasil kompleks.  "
             "*Referensi: Saha et al. (2010) Ch. 7 (lumped-parameter); "
             "IEEE Std C37.114-2014 (versi urutan negatif); "
@@ -1885,27 +1897,27 @@ def render_de_formula_expander(result: dict, quality: dict, line_param: dict):
         with c1:
             st.markdown("**Local End:**")
             if V1L is not None:
-                st.markdown(f"V₁L = `{_fmt_c_de(V1L, 'kV')}`")
+                st.markdown(f"V1L = `{_fmt_c_de(V1L, 'kV')}`")
             if I1L is not None:
-                st.markdown(f"I₁L = `{_fmt_c_de(I1L, 'A')}`")
+                st.markdown(f"I1L = `{_fmt_c_de(I1L, 'A')}`")
         with c2:
             st.markdown("**Remote End:**")
             if V1R is not None:
-                st.markdown(f"V₁R = `{_fmt_c_de(V1R, 'kV')}`")
+                st.markdown(f"V1R = `{_fmt_c_de(V1R, 'kV')}`")
             if I1R is not None:
-                st.markdown(f"I₁R = `{_fmt_c_de(I1R, 'A')}`")
+                st.markdown(f"I1R = `{_fmt_c_de(I1R, 'A')}`")
 
         c1, c2, c3 = st.columns(3)
-        c1.markdown(f"**Z₁/km** = `{_fmt_c_de(z1, 'Ω/km')}`")
-        c2.markdown(f"**Z₁ total** = `{_fmt_c_de(z1_total, 'Ω')}`")
+        c1.markdown(f"**Z1/km** = `{_fmt_c_de(z1, 'ohm/km')}`")
+        c2.markdown(f"**Z1 total** = `{_fmt_c_de(z1_total, 'ohm')}`")
         c3.markdown(f"**L** = `{L:.6f} km`")
 
         st.markdown("#### 3. Langkah Perhitungan")
         if all(v is not None for v in [V1L, V1R, I1L, I1R]):
             numerator = V1L - V1R + I1R * z1 * L
             denominator = z1 * (I1L + I1R)
-            st.markdown(f"**Numerator** = V₁L − V₁R + I₁R·Z₁·L = `{_fmt_c_de(numerator)}`")
-            st.markdown(f"**Denominator** = Z₁·(I₁L + I₁R) = `{_fmt_c_de(denominator)}`")
+            st.markdown(f"**Numerator** = V1L - V1R + I1R*Z1*L = `{_fmt_c_de(numerator)}`")
+            st.markdown(f"**Denominator** = Z1*(I1L + I1R) = `{_fmt_c_de(denominator)}`")
 
         st.markdown(f"**x (kompleks)** = {d_complex.real:.4f} + j{d_complex.imag:.4f} km")
         st.markdown(f"**x (dipakai)** = Re(x) = **{d_km:.4f} km** ({d_km / L * 100:.2f}%)")
@@ -1913,13 +1925,13 @@ def render_de_formula_expander(result: dict, quality: dict, line_param: dict):
         imag_d = d_complex.imag
         imag_pct = abs(imag_d) / L * 100
         if abs(imag_d) < 0.02 * L:
-            imag_note = "kecil — sinkronisasi rekaman baik"
+            imag_note = "kecil - sinkronisasi rekaman baik"
         elif abs(imag_d) < 0.05 * L:
-            imag_note = "perlu diperhatikan — validasi sinkronisasi"
+            imag_note = "perlu diperhatikan - validasi sinkronisasi"
         else:
-            imag_note = "besar — cek sinkronisasi dan arah arus remote"
+            imag_note = "besar - cek sinkronisasi dan arah arus remote"
         st.markdown(
-            f"**Im(x)** = {imag_d:.4f} km ({imag_pct:.2f}% panjang line) → {imag_note}"
+            f"**Im(x)** = {imag_d:.4f} km ({imag_pct:.2f}% panjang line) -> {imag_note}"
         )
 
         vf_local = result.get("V_fault_from_local")
@@ -1941,9 +1953,9 @@ def render_de_formula_expander(result: dict, quality: dict, line_param: dict):
                 f"**|Mismatch|** = {mismatch:.4f} ({mismatch_pct:.2f}% dari V_F referensi)"
             )
             if mismatch_pct < 5:
-                st.success(f"Mismatch kecil ({mismatch_pct:.2f}%) — sinkronisasi rekaman baik.")
+                st.success(f"Mismatch kecil ({mismatch_pct:.2f}%) - sinkronisasi rekaman baik.")
             elif mismatch_pct < 10:
-                st.warning(f"Mismatch moderate ({mismatch_pct:.2f}%) — validasi sinkronisasi rekaman.")
+                st.warning(f"Mismatch moderate ({mismatch_pct:.2f}%) - validasi sinkronisasi rekaman.")
             else:
-                st.error(f"Mismatch besar ({mismatch_pct:.2f}%) — cek sinkronisasi dan arah arus remote.")
+                st.error(f"Mismatch besar ({mismatch_pct:.2f}%) - cek sinkronisasi dan arah arus remote.")
 
