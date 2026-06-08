@@ -33,13 +33,83 @@ from line_analysis_helpers import infer_gi_names_from_line_name
 
 SAVED_CASES_SHEET = "saved_cases"
 SAVED_CASES_DATA_SHEET = "saved_cases_data"
+PENDING_CLOUD_CASE_ARCHIVE_KEY = "_pending_cloud_case_archive_bytes"
+PENDING_CLOUD_CASE_INDEX_KEY = "_pending_cloud_case_index_record"
+PENDING_CLOUD_CASE_ID_KEY = "_pending_cloud_case_id"
 # Aman di bawah batas 50.000 karakter per sel
 _CHUNK_SIZE = 49000
 
 SAVED_CASES_COLUMNS = [
     "case_id", "case_name", "line_name", "gi_local", "gi_remote",
     "fault_time_cfg", "saved_at", "filename", "size_bytes", "n_chunks",
+    "upt", "ultg", "upt_local", "ultg_local", "upt_remote", "ultg_remote", "segment",
 ]
+
+
+def _active_filter_value(value) -> str:
+    text = str(value or "").strip()
+    if not text or text == "Semua" or text.startswith("Pilih "):
+        return ""
+    return text
+
+
+def _first_active_state_value(*keys) -> str:
+    for key in keys:
+        value = st.session_state.get(key)
+        active = _active_filter_value(value)
+        if active:
+            return active
+    return ""
+
+
+def _current_filter_metadata() -> dict:
+    upt_local = _first_active_state_value(
+        "sidebar_filter_upt_local",
+        "sidebar_filter_upt",
+    )
+    ultg_local = _first_active_state_value(
+        "sidebar_filter_ultg_local",
+        "sidebar_filter_ultg",
+        "tower_schedule_pre_ultg",
+        "tower_schedule_selected_ultg",
+    )
+    segment = _first_active_state_value("sidebar_filter_segment")
+    return {
+        "upt": upt_local,
+        "ultg": ultg_local,
+        "upt_local": upt_local,
+        "ultg_local": ultg_local,
+        "upt_remote": _first_active_state_value("sidebar_filter_upt_remote"),
+        "ultg_remote": _first_active_state_value("sidebar_filter_ultg_remote"),
+        "segment": segment,
+    }
+
+
+def _seed_filter_metadata_from_index(record: dict):
+    """Pulihkan filter sidebar dari metadata indeks untuk payload case lama."""
+    if not isinstance(record, dict):
+        return
+    record = dict(record)
+    if not _active_filter_value(record.get("upt_local")):
+        record["upt_local"] = record.get("upt", "")
+    if not _active_filter_value(record.get("ultg_local")):
+        record["ultg_local"] = record.get("ultg", "")
+
+    for column, state_key in (
+        ("upt_local", "sidebar_filter_upt_local"),
+        ("ultg_local", "sidebar_filter_ultg_local"),
+        ("upt_remote", "sidebar_filter_upt_remote"),
+        ("ultg_remote", "sidebar_filter_ultg_remote"),
+        ("segment", "sidebar_filter_segment"),
+    ):
+        value = _active_filter_value(record.get(column))
+        if value:
+            st.session_state[state_key] = value
+
+    if _active_filter_value(record.get("upt_local")):
+        st.session_state["sidebar_filter_upt"] = _active_filter_value(record.get("upt_local"))
+    if _active_filter_value(record.get("ultg_local")):
+        st.session_state["sidebar_filter_ultg"] = _active_filter_value(record.get("ultg_local"))
 
 
 def _ensure_sheet(ss, sid, name, cols: int = 0):
@@ -137,6 +207,7 @@ def save_case_to_cloud(spreadsheet_url: str, case_name: str = "", sheet_name: st
         "line_name": line_name,
         "gi_local": gi_local or "",
         "gi_remote": gi_remote or "",
+        **_current_filter_metadata(),
         "fault_time_cfg": fault_time,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
         "filename": filename,
@@ -158,11 +229,36 @@ def list_saved_cases(spreadsheet_url: str, sheet_name: str = SAVED_CASES_SHEET) 
     return recs
 
 
-def load_case_from_cloud(spreadsheet_url: str, case_id: str):
+def process_pending_cloud_case_restore():
+    """Restore case cloud yang sudah diambil pada run sebelumnya, sebelum widget dibuat."""
+    archive_bytes = st.session_state.pop(PENDING_CLOUD_CASE_ARCHIVE_KEY, None)
+    if not archive_bytes:
+        return False, ""
+    index_record = st.session_state.pop(PENDING_CLOUD_CASE_INDEX_KEY, {}) or {}
+    case_id = st.session_state.pop(PENDING_CLOUD_CASE_ID_KEY, "")
+    restore_case_archive(archive_bytes)
+    _seed_filter_metadata_from_index(index_record)
+    if case_id:
+        st.session_state["_restored_case_hash"] = f"cloud:{case_id}"
+    return True, "Case berhasil dimuat dari spreadsheet."
+
+
+def load_case_from_cloud(
+    spreadsheet_url: str,
+    case_id: str,
+    sheet_name: str = SAVED_CASES_SHEET,
+    *,
+    defer_restore: bool = False,
+):
     """Baca chunk by case_id → rakit → restore. Return (ok, message)."""
     sid = _extract_spreadsheet_id(spreadsheet_url)
     if not sid or not case_id:
         return False, "URL spreadsheet atau case_id tidak valid."
+    index_record = {}
+    for rec in read_sheet_records(spreadsheet_url, sheet_name):
+        if str(rec.get("case_id", "")).strip() == str(case_id).strip():
+            index_record = rec
+            break
     try:
         ss = _build_sheets_service().spreadsheets()
         b64 = _read_payload_chunks(ss, sid, str(case_id).strip())
@@ -172,7 +268,13 @@ def load_case_from_cloud(spreadsheet_url: str, case_id: str):
         return False, "Payload case tidak ditemukan di sheet `saved_cases_data`."
     try:
         archive_bytes = base64.b64decode(b64)
+        if defer_restore:
+            st.session_state[PENDING_CLOUD_CASE_ARCHIVE_KEY] = archive_bytes
+            st.session_state[PENDING_CLOUD_CASE_INDEX_KEY] = index_record
+            st.session_state[PENDING_CLOUD_CASE_ID_KEY] = str(case_id).strip()
+            return True, "Case siap dimuat. Aplikasi akan memulihkan case pada rerun berikutnya."
         restore_case_archive(archive_bytes)
+        _seed_filter_metadata_from_index(index_record)
     except Exception as exc:
         return False, f"Gagal memulihkan case: {exc}"
     return True, "Case berhasil dimuat dari spreadsheet."

@@ -150,6 +150,7 @@ from cloud_cases import (
     save_case_to_cloud,
     list_saved_cases,
     load_case_from_cloud,
+    process_pending_cloud_case_restore,
 )
 
 
@@ -464,6 +465,12 @@ st.markdown(
         display: none;
     }
 
+    [data-testid="stSidebar"] .porlung-sidebar-divider-tight {
+        border: 0;
+        border-top: 1px solid rgba(49, 51, 63, 0.18);
+        margin: 0.75rem 0 0.75rem 0;
+    }
+
     div[data-testid="stTabs"] [role="tablist"],
     div[data-testid="stTabs"] [data-baseweb="tab-list"] {
         background: #ffffff !important;
@@ -588,30 +595,77 @@ def install_sidebar_accordion_rules():
         """
         <script>
         (function () {
+            var SAVE_BUTTON_CLASS = "porlung-sidebar-save-case";
+
+            function installSaveButtonStyle() {
+                if (window.parent.document.getElementById("porlungSidebarSaveCaseStyle")) return;
+                var style = window.parent.document.createElement("style");
+                style.id = "porlungSidebarSaveCaseStyle";
+                style.textContent = ""
+                    + "[data-testid='stSidebar'] button." + SAVE_BUTTON_CLASS + " {"
+                    + "background:#2f8f46 !important;"
+                    + "border-color:#26763a !important;"
+                    + "color:#ffffff !important;"
+                    + "font-weight:700 !important;"
+                    + "box-shadow:0 1px 0 rgba(20,96,45,.24) !important;"
+                    + "}"
+                    + "[data-testid='stSidebar'] button." + SAVE_BUTTON_CLASS + ":hover {"
+                    + "background:#26763a !important;"
+                    + "border-color:#1f6130 !important;"
+                    + "color:#ffffff !important;"
+                    + "}";
+                window.parent.document.head.appendChild(style);
+            }
+
+            function styleSaveButton(sb) {
+                installSaveButtonStyle();
+                var matched = 0;
+                sb.querySelectorAll('button').forEach(function (btn) {
+                    var text = (btn.innerText || btn.textContent || "").trim();
+                    if (text === "Simpan Case ke Cloud") {
+                        btn.classList.add(SAVE_BUTTON_CLASS);
+                        matched += 1;
+                    }
+                });
+                return matched;
+            }
+
+            function retryStyleSaveButton(sb, attempt) {
+                var matched = styleSaveButton(sb);
+                if (matched > 0 || attempt >= 20) return;
+                setTimeout(function () {
+                    retryStyleSaveButton(sb, attempt + 1);
+                }, 200);
+            }
+
+            function installClickAccordion(sb) {
+                sb.querySelectorAll('details').forEach(function (det) {
+                    det.removeAttribute("name");
+                });
+                if (sb._porlungAccordionClickBound) return;
+                sb._porlungAccordionClickBound = true;
+                sb.addEventListener("click", function (event) {
+                    var summary = event.target.closest && event.target.closest("summary");
+                    if (!summary || !sb.contains(summary)) return;
+                    var current = summary.closest("details");
+                    if (!current || current.open) return;
+                    sb.querySelectorAll("details[open]").forEach(function (other) {
+                        if (other !== current) {
+                            var otherSummary = other.querySelector("summary");
+                            if (otherSummary) {
+                                otherSummary.click();
+                            }
+                        }
+                    });
+                }, true);
+            }
+
             function setup() {
                 var sb = window.parent.document.querySelector('[data-testid="stSidebar"]');
                 if (!sb) { setTimeout(setup, 300); return; }
-
-                function bind() {
-                    sb.querySelectorAll('details').forEach(function (det) {
-                        var summary = det.querySelector('summary');
-                        if (!summary || summary._porlungAccordionBound) return;
-                        summary._porlungAccordionBound = true;
-                        summary.addEventListener('click', function () {
-                            if (!det.open) {
-                                sb.querySelectorAll('details[open]').forEach(function (other) {
-                                    if (other !== det) {
-                                        var s = other.querySelector('summary');
-                                        if (s) s.click();
-                                    }
-                                });
-                            }
-                        });
-                    });
-                }
-
-                bind();
-                new MutationObserver(bind).observe(sb, { childList: true, subtree: true });
+                installClickAccordion(sb);
+                retryStyleSaveButton(sb, 0);
+                setTimeout(function () { installClickAccordion(sb); }, 250);
             }
             setup();
         })();
@@ -624,7 +678,59 @@ def install_sidebar_accordion_rules():
 
 install_sidebar_accordion_rules()
 
+def install_sidebar_save_case_button_style():
+    """Warnai tombol Simpan Case ke Cloud di sidebar setelah tombolnya dirender."""
+    html = """
+    <script>
+    (function () {
+        var SAVE_BUTTON_CLASS = "porlung-sidebar-save-case";
+        function ensureStyle() {
+            if (window.parent.document.getElementById("porlungSidebarSaveCaseStyle")) return;
+            var style = window.parent.document.createElement("style");
+            style.id = "porlungSidebarSaveCaseStyle";
+            style.textContent = ""
+                + "[data-testid='stSidebar'] button." + SAVE_BUTTON_CLASS + " {"
+                + "background:#2f8f46 !important;"
+                + "border-color:#26763a !important;"
+                + "color:#ffffff !important;"
+                + "font-weight:700 !important;"
+                + "box-shadow:0 1px 0 rgba(20,96,45,.24) !important;"
+                + "}"
+                + "[data-testid='stSidebar'] button." + SAVE_BUTTON_CLASS + ":hover {"
+                + "background:#26763a !important;"
+                + "border-color:#1f6130 !important;"
+                + "color:#ffffff !important;"
+                + "}";
+            window.parent.document.head.appendChild(style);
+        }
+        function applyStyle() {
+            ensureStyle();
+            var sb = window.parent.document.querySelector('[data-testid="stSidebar"]');
+            if (!sb) return;
+            sb.querySelectorAll('button').forEach(function (btn) {
+                var text = (btn.innerText || btn.textContent || "").trim();
+                if (text === "Simpan Case ke Cloud") {
+                    btn.classList.add(SAVE_BUTTON_CLASS);
+                }
+            });
+        }
+        applyStyle();
+        setTimeout(applyStyle, 100);
+        setTimeout(applyStyle, 350);
+    })();
+    </script>
+    """
+    st.html(html, width="content", unsafe_allow_javascript=True)
+
+
 st.title("Transmission Fault Locator")
+
+try:
+    _pending_cloud_ok, _pending_cloud_msg = process_pending_cloud_case_restore()
+    if _pending_cloud_ok and _pending_cloud_msg:
+        st.session_state["case_restore_message"] = _pending_cloud_msg
+except Exception as _pending_cloud_err:
+    st.session_state["case_restore_message"] = f"Gagal memulihkan case: {_pending_cloud_err}"
 
 _case_restored = bool(st.session_state.get("_restored_case_hash"))
 cfg_file = None
@@ -896,8 +1002,6 @@ _sb_bay_r = st.session_state.get("sidebar_filter_bay_remote", "")
 
 # Tower Schedule: override langsung (bukan setdefault) selama data belum dimuat
 if "tower_schedule_df" not in st.session_state:
-    if _sb_ia(_sb_ultg):
-        st.session_state["tower_schedule_pre_ultg"] = _sb_ultg
     if _sb_ia(_sb_seg):
         st.session_state["tower_schedule_pre_segment"] = _sb_seg
 
@@ -936,8 +1040,9 @@ if _sb_save_url and "line_param" in st.session_state:
             st.sidebar.success(_sb_sc_msg)
         else:
             st.sidebar.error(_sb_sc_msg)
+    install_sidebar_save_case_button_style()
 
-st.sidebar.divider()
+st.sidebar.markdown('<hr class="porlung-sidebar-divider-tight">', unsafe_allow_html=True)
 _case_loaded = bool(st.session_state.get("_restored_case_hash"))
 with st.sidebar.expander("Case Storage", expanded=False):
     case_archive_file = st.file_uploader("Load Case (.zip)", type=["zip"], key="case_archive_file")
@@ -1015,22 +1120,26 @@ if cfg_file is None or dat_file is None:
                 _lp_cloud_opts = {
                     f"{c.get('case_name') or '-'}  |  {c.get('saved_at') or '-'}": c for c in _lp_cloud_cases
                 }
-                _lp_cloud_sel = st.selectbox(
-                    "Case Tersimpan", list(_lp_cloud_opts.keys()), key="landing_saved_case_select"
-                )
-                _lp_b1, _lp_b2 = st.columns([4, 1])
-                with _lp_b1:
-                    _lp_do_load = st.button("Muat Case Terpilih", key="landing_load_case_cloud_btn", width="stretch")
+                with st.form("landing_load_saved_case_form"):
+                    _lp_cloud_sel = st.selectbox(
+                        "Case Tersimpan", list(_lp_cloud_opts.keys()), key="landing_saved_case_select"
+                    )
+                    _lp_do_load = st.form_submit_button("Muat Case Terpilih", width="stretch")
+                _lp_b2, _lp_pad = st.columns([1, 4])
                 with _lp_b2:
                     if st.button("\u21bb Muat Ulang Daftar", key="reload_landing_saved_cases", help="Muat ulang daftar case tersimpan", width="stretch"):
                         st.session_state.pop("_saved_cases_cache", None)
                         st.rerun()
                 if _lp_do_load:
                     _lp_case_id = str(_lp_cloud_opts[_lp_cloud_sel].get("case_id", ""))
-                    _lp_ok, _lp_msg = load_case_from_cloud(_lp_cloud_url, _lp_case_id)
+                    _lp_ok, _lp_msg = load_case_from_cloud(
+                        _lp_cloud_url,
+                        _lp_case_id,
+                        _lp_cloud_sheet,
+                        defer_restore=True,
+                    )
                     if _lp_ok:
                         st.session_state["case_restore_message"] = _lp_msg
-                        st.session_state["_restored_case_hash"] = f"cloud:{_lp_case_id}"
                         st.rerun()
                     else:
                         st.error(_lp_msg)
@@ -1703,6 +1812,81 @@ def get_rx_locus_context_from_session(end_side: str):
     }, None
 
 
+def _rx_locus_zone_source_config(end_side: str):
+    key = f"rx_locus_zone_setting_source_{end_side}"
+    source = st.session_state.get(key, "line_data")
+    if source not in ["line_data", "distance_settings"]:
+        source = "line_data"
+        st.session_state[key] = source
+    if source == "line_data":
+        return {
+            "source": source,
+            "label": "line_data",
+            "sheet_key": "rx_locus_line_data_sheet_name",
+            "default_sheet": "line_data",
+        }
+    return {
+        "source": source,
+        "label": "distance_settings",
+        "sheet_key": "distance_settings_sheet_name",
+        "default_sheet": "distance_settings",
+    }
+
+
+def read_rx_locus_zone_settings_df(end_side: str):
+    cfg = _rx_locus_zone_source_config(end_side)
+    sheet_name = st.session_state.get(cfg["sheet_key"], cfg["default_sheet"]) or cfg["default_sheet"]
+    df = read_google_spreadsheet_table_cached(
+        st.session_state.get("database_spreadsheet_url", ""),
+        sheet_name,
+    )
+    return make_streamlit_safe_columns(df), cfg, sheet_name
+
+
+def _rx_locus_normalized_text(value) -> str:
+    return "".join(re.findall(r"[A-Z0-9]+", str(value or "").upper()))
+
+
+def _rx_locus_normalized_tokens(value) -> list[str]:
+    return re.findall(r"[A-Z0-9]+", str(value or "").upper())
+
+
+def _rx_locus_match_bay_label(options: list[str], end_side: str) -> str | None:
+    """Match sidebar Bay/Line to R-X options, including line_data's line-name fallback."""
+    sidebar_bay = st.session_state.get(f"sidebar_filter_bay_{end_side}", "")
+    sidebar_line = st.session_state.get(f"sidebar_filter_line_{end_side}", "")
+    if not _sb_ia(sidebar_bay) and not _sb_ia(sidebar_line):
+        return None
+
+    bay_norm = _rx_locus_normalized_text(sidebar_bay)
+    line_norm = _rx_locus_normalized_text(sidebar_line)
+    exact_targets = []
+    if _sb_ia(sidebar_bay):
+        exact_targets.append(sidebar_bay)
+    if _sb_ia(sidebar_bay) and _sb_ia(sidebar_line):
+        exact_targets.extend([
+            f"{sidebar_bay} / {sidebar_line}",
+            f"{sidebar_bay} {sidebar_line}",
+            f"{sidebar_bay}#{sidebar_line}",
+            f"{sidebar_bay}-{sidebar_line}",
+        ])
+    target_norms = {_rx_locus_normalized_text(target) for target in exact_targets}
+
+    for option in options:
+        if _rx_locus_normalized_text(option) in target_norms:
+            return option
+
+    for option in options:
+        option_norm = _rx_locus_normalized_text(option)
+        option_tokens = _rx_locus_normalized_tokens(option)
+        bay_ok = not bay_norm or bay_norm in option_norm
+        line_ok = not line_norm or line_norm in option_tokens or option_norm.endswith(line_norm)
+        if bay_ok and line_ok:
+            return option
+
+    return None
+
+
 def build_locus_zone_settings_from_session(end_side: str, label: str, loop_name: str):
     if not st.session_state.get(f"rx_locus_show_zone_{end_side}", True):
         return [], {"zone_count": 0}, None
@@ -1719,17 +1903,13 @@ def build_locus_zone_settings_from_session(end_side: str, label: str, loop_name:
         )
 
     try:
-        distance_settings_df = read_google_spreadsheet_table_cached(
-            st.session_state.get("database_spreadsheet_url", ""),
-            st.session_state.get("distance_settings_sheet_name", "distance_settings"),
-        )
-        distance_settings_df = make_streamlit_safe_columns(distance_settings_df)
+        distance_settings_df, zone_source_cfg, zone_sheet_name = read_rx_locus_zone_settings_df(end_side)
     except Exception as exc:
         return [], {"zone_count": 0, "zone_setting_base": zone_setting_base}, (
             f"Setting distance relay belum dapat dibaca dari spreadsheet: {exc}"
         )
 
-    distance_columns = detect_locus_distance_setting_columns(distance_settings_df)
+    distance_columns = detect_locus_distance_setting_columns(distance_settings_df, zone_setting_base)
     substation_col = distance_columns.get("substation")
     bay_col = distance_columns.get("bay")
     substation_options = sorted_nonempty_values(distance_settings_df, substation_col)
@@ -1749,13 +1929,14 @@ def build_locus_zone_settings_from_session(end_side: str, label: str, loop_name:
             filtered_settings_df[substation_col].astype(str).str.strip() == selected_substation
         ].reset_index(drop=True)
 
-    bay_labels = ["Semua Bay"] + sorted_nonempty_values(filtered_settings_df, bay_col)
+    bay_filter_col = bay_col or distance_columns.get("line")
+    bay_labels = ["Semua Bay"] + sorted_nonempty_values(filtered_settings_df, bay_filter_col)
     selected_bay = st.session_state.get(f"rx_locus_bay_{end_side}", "Semua Bay")
     if selected_bay not in bay_labels:
-        selected_bay = "Semua Bay"
-    if selected_bay != "Semua Bay" and bay_col:
+        selected_bay = _rx_locus_match_bay_label(bay_labels, end_side) or "Semua Bay"
+    if selected_bay != "Semua Bay" and bay_filter_col:
         filtered_settings_df = filtered_settings_df[
-            filtered_settings_df[bay_col].astype(str).str.strip() == selected_bay
+            filtered_settings_df[bay_filter_col].astype(str).str.strip() == selected_bay
         ].reset_index(drop=True)
 
     extra_filter = str(st.session_state.get(f"rx_locus_filter_{end_side}", "") or "").strip()
@@ -1772,7 +1953,9 @@ def build_locus_zone_settings_from_session(end_side: str, label: str, loop_name:
             "zone_setting_base": zone_setting_base,
             "selected_substation": selected_substation,
             "selected_bay": selected_bay,
-        }, "Tidak ada baris distance_settings yang cocok dengan filter."
+            "zone_setting_source": zone_source_cfg["source"],
+            "zone_setting_sheet": zone_sheet_name,
+        }, f"Tidak ada baris {zone_sheet_name} yang cocok dengan filter."
 
     row_labels = build_locus_setting_row_labels(filtered_settings_df, distance_columns)
     selected_label = st.session_state.get(f"rx_locus_setting_row_{end_side}")
@@ -1793,7 +1976,9 @@ def build_locus_zone_settings_from_session(end_side: str, label: str, loop_name:
         if _sb_line and _sb_ia(_sb_line) and _line_col and _line_col in filtered_settings_df.columns:
             _tgt = _nv_l(_sb_line)
             for _i, _lbl in enumerate(row_labels):
-                if _nv_l(filtered_settings_df.iloc[_i][_line_col]) == _tgt:
+                _row_line = _nv_l(filtered_settings_df.iloc[_i][_line_col])
+                _row_tokens = re.findall(r"[A-Z0-9]+", _row_line)
+                if _row_line == _tgt or _tgt in _row_tokens:
                     _auto = _lbl
                     break
         if _auto is None and len(row_labels) == 1:
@@ -1815,6 +2000,8 @@ def build_locus_zone_settings_from_session(end_side: str, label: str, loop_name:
     return zones, {
         "zone_count": int(len(zones)),
         "zone_setting_base": zone_setting_base,
+        "zone_setting_source": zone_source_cfg["source"],
+        "zone_setting_sheet": zone_sheet_name,
         "selected_substation": selected_substation,
         "selected_bay": selected_bay,
         "selected_setting": selected_label,
@@ -1952,6 +2139,47 @@ def build_rx_locus_figure_from_session(end_side: str):
     return fig_locus, trajectory_df, meta, zone_warning
 
 
+def render_rx_locus_literature_notes(meta: dict | None):
+    meta = meta or {}
+    zone_source = meta.get("zone_setting_source", "")
+    zone_sheet = meta.get("zone_setting_sheet", "")
+    zone_base = meta.get("zone_setting_base", "")
+    zone_count = int(meta.get("zone_count", 0) or 0)
+
+    with st.expander("Catatan literatur R-X Locus dan zona distance", expanded=False):
+        st.markdown(
+            """
+**Kesesuaian dengan literatur**
+
+- Trajectory pada grafik ini adalah apparent loop impedance yang diplot pada bidang R-X dari fasor tegangan dan arus sliding DFT. Ini sesuai dengan konsep umum distance relay: karakteristik distance relay ditampilkan pada R-X diagram dan apparent impedance dipakai untuk menilai apakah fault masuk zona operasi.
+- Overlay zona proteksi memakai pendekatan quadrilateral/polygonal berbasis `X reach` dan `R reach` dari spreadsheet. Untuk loop ground aplikasi memakai kolom `R*G`; untuk loop phase memakai `R*P`.
+- Bentuk ini sesuai sebagai visualisasi engineering dari quadrilateral distance element karena resistive reach dan reactive reach diperlakukan independen. Namun ini belum menjadi replica penuh relay vendor: tilt reactance, directional supervision, left/right blinder detail, load encroachment, memory/polarizing quantity, dan logika khusus pabrikan belum dimodelkan eksplisit.
+"""
+        )
+        if zone_count:
+            st.caption(
+                f"Zona aktif: {zone_count} zona dari sheet `{zone_sheet}` "
+                f"({zone_source}, base {zone_base})."
+            )
+        else:
+            st.caption("Zona relay belum aktif atau belum ada baris setting yang valid.")
+
+        st.markdown(
+            """
+**Referensi lokal**
+
+- `IEEE-Guide-for-Protective-Relaying.pdf`, PDF page 68: distance relay characteristics can be shown on R-X diagrams; quadrilateral characteristic has four sides and is formed from directional/reactance characteristics plus resistive reach blinders.
+- `E04-034 - Distance Protection - US.pdf`, PDF page sekitar Figure 6: contoh koordinasi zona distance, termasuk Zone 1 sekitar 80-85% impedansi saluran terproteksi.
+- `energies-14-07074-v2.pdf`, PDF page 6: quadrilateral characteristic dibentuk dari directional element, reactance element, right resistance blinder, dan left resistance blinder; paper ini juga menekankan resistive/reactive reach yang dapat dikendalikan independen.
+- `7074_ApplyingDependable_KD_20221013_Web2.pdf`, PDF page 4: quadrilateral/polygonal distance element memiliki R dan X reach independen, dan keamanan Zone 1 dipengaruhi tilt reactance serta reach/blinder.
+"""
+        )
+        st.caption(
+            'Gunakan `rg -n -g "*.pages.md" "quadrilateral|R-X|apparent impedance|Zone 1" '
+            "literature\\distance_zone` untuk membuka konteks halaman PDF terkait."
+        )
+
+
 
 
 with tab0:
@@ -2020,6 +2248,7 @@ with tab0:
         [spreadsheet]
         database_url = "https://docs.google.com/spreadsheets/d/..."
         database_line_sheet = "line_impedance"
+        rx_locus_line_data_sheet = "line_data"
         database_cable_sheet = "cable_impedance"
         database_distance_sheet = "distance_settings"
         tower_schedule_url = "https://docs.google.com/spreadsheets/d/..."
@@ -2263,17 +2492,23 @@ with tab0:
                 f"{c.get('case_name') or '-'}  |  {c.get('line_name') or '-'}  |  {c.get('saved_at') or '-'}": c
                 for c in _cloud_cases
             }
-            _sel_label = st.selectbox(
-                "Case Tersimpan",
-                list(_opts.keys()),
-                key="saved_case_select",
-            )
-            if st.button("Muat Case Terpilih", key="load_case_cloud_btn", width="stretch"):
+            with st.form("setup_db_load_saved_case_form"):
+                _sel_label = st.selectbox(
+                    "Case Tersimpan",
+                    list(_opts.keys()),
+                    key="saved_case_select",
+                )
+                _load_selected_case = st.form_submit_button("Muat Case Terpilih", width="stretch")
+            if _load_selected_case:
                 _lc_case_id = str(_opts[_sel_label].get("case_id", ""))
-                _lc_ok, _lc_msg = load_case_from_cloud(_cloud_url, _lc_case_id)
+                _lc_ok, _lc_msg = load_case_from_cloud(
+                    _cloud_url,
+                    _lc_case_id,
+                    _cloud_sheet,
+                    defer_restore=True,
+                )
                 if _lc_ok:
                     st.success(_lc_msg)
-                    st.session_state["_restored_case_hash"] = f"cloud:{_lc_case_id}"
                     st.rerun()
                 else:
                     st.error(_lc_msg)
@@ -2311,17 +2546,6 @@ with tab_tower:
             "Link Tower Schedule Spreadsheet belum diatur. Buka tab Setup DB lalu isi "
             "`Tower Schedule Spreadsheet URL` atau upload runtime credentials terlebih dahulu."
         )
-    col_tower_refresh, _ = st.columns([0.9, 5])
-    with col_tower_refresh:
-        st.write("")
-        st.write("")
-        if st.button("Reload", key="reload_tower_schedule"):
-            read_google_spreadsheet_query_cached.clear()
-            st.session_state.pop("tower_schedule_df", None)
-            st.session_state.pop("tower_schedule_last_query", None)
-            st.session_state["tower_schedule_loaded"] = False
-            st.info("Cache tower schedule dibersihkan. Isi filter awal lalu klik Load / Refresh Tower Schedule.")
-
     tower_filter_options_df = pd.DataFrame()
     if tower_schedule_url_configured:
         try:
@@ -2347,8 +2571,6 @@ with tab_tower:
         )
         values = [value for value in values if value and value.lower() not in ["nan", "none"]]
         return ["Semua"] + sorted(set(values), key=lambda item: item.upper())
-
-    pre_ultg_options = _preload_options_from_df(tower_filter_options_df, "ULTG")
 
     def _norm_filter(s):
         """Normalisasi untuk matching: lowercase, strip, collapse spasi di sekitar hyphen."""
@@ -2383,72 +2605,52 @@ with tab_tower:
             return clauses[0]
         return "(" + " or ".join(clauses) + ")"
 
-    # Resolve sidebar-synced ULTG: exact match -> pakai langsung; normalized match -> pakai nilai asli spreadsheet; no match -> Semua
-    _pre_ultg_synced = st.session_state.get("tower_schedule_pre_ultg", "Semua")
-    if _sb_ia(_pre_ultg_synced) and _pre_ultg_synced not in pre_ultg_options:
-        _matched_ultg = next((o for o in pre_ultg_options if _norm_filter(o) == _norm_filter(_pre_ultg_synced)), None)
-        st.session_state["tower_schedule_pre_ultg"] = _matched_ultg if _matched_ultg else "Semua"
-
     tower_has_loaded_data = "tower_schedule_df" in st.session_state
-    with st.expander("Filter Awal Load", expanded=not tower_has_loaded_data):
-        pre_filter_col1, pre_filter_col2, pre_filter_col3 = st.columns([1, 1, 1.2])
+    pre_segment_options = _preload_options_from_df(tower_filter_options_df, "SEGMENT")
+    _pre_seg_synced = st.session_state.get("tower_schedule_pre_segment", "Semua")
+    if _pre_seg_synced not in pre_segment_options:
+        if _sb_ia(_pre_seg_synced):
+            _matched_seg = next((o for o in pre_segment_options if _norm_filter(o) == _norm_filter(_pre_seg_synced)), None)
+            st.session_state["tower_schedule_pre_segment"] = _matched_seg if _matched_seg else "Semua"
+        else:
+            st.session_state["tower_schedule_pre_segment"] = "Semua"
+    if "tower_schedule_load_all" not in st.session_state:
+        st.session_state["tower_schedule_load_all"] = False
+
+    st.markdown("#### Filter Awal Load")
+    with st.form("tower_schedule_initial_load_form"):
+        pre_filter_col1, pre_filter_col2, pre_filter_col3 = st.columns([2, 1, 1.2])
         with pre_filter_col1:
-            if st.session_state.get("tower_schedule_pre_ultg") not in pre_ultg_options:
-                st.session_state["tower_schedule_pre_ultg"] = "Semua"
-            selected_pre_ultg = st.selectbox(
-                "ULTG sebelum load",
-                pre_ultg_options,
-                key="tower_schedule_pre_ultg",
-                help="Isi persis sesuai nilai kolom ULTG agar Google Sheet hanya mengambil baris ULTG tersebut.",
-            )
-            tower_pre_ultg = "" if selected_pre_ultg == "Semua" else selected_pre_ultg
-
-        segment_options_df = tower_filter_options_df
-        if tower_pre_ultg and "ULTG" in tower_filter_options_df.columns:
-            ultg_normalized = tower_filter_options_df["ULTG"].astype(str).str.strip().str.upper()
-            segment_options_df = tower_filter_options_df[
-                ultg_normalized == tower_pre_ultg.strip().upper()
-            ]
-        pre_segment_options = _preload_options_from_df(segment_options_df, "SEGMENT")
-        _pre_seg_synced = st.session_state.get("tower_schedule_pre_segment", "Semua")
-        if _pre_seg_synced not in pre_segment_options:
-            if _sb_ia(_pre_seg_synced):
-                # Resolve: normalized match -> pakai nilai asli spreadsheet; no match -> Semua
-                _matched_seg = next((o for o in pre_segment_options if _norm_filter(o) == _norm_filter(_pre_seg_synced)), None)
-                st.session_state["tower_schedule_pre_segment"] = _matched_seg if _matched_seg else "Semua"
-            else:
-                st.session_state["tower_schedule_pre_segment"] = "Semua"
-
-        with pre_filter_col2:
             selected_pre_segment = st.selectbox(
                 "Segment sebelum load",
                 pre_segment_options,
                 key="tower_schedule_pre_segment",
-                help="Isi persis sesuai nilai kolom SEGMENT agar Google Sheet hanya mengambil baris segment tersebut.",
+                help="Filter awal berfokus pada SEGMENT agar data tetap mencakup tower dengan UPT/ULTG berbeda dalam satu segment.",
             )
             tower_pre_segment = "" if selected_pre_segment == "Semua" else selected_pre_segment
-        with pre_filter_col3:
-            if "tower_schedule_load_all" not in st.session_state:
-                st.session_state["tower_schedule_load_all"] = False
+        with pre_filter_col2:
             tower_load_all = st.checkbox(
                 "Load semua data",
                 key="tower_schedule_load_all",
-                help="Matikan opsi ini agar load lebih ringan memakai filter awal ULTG/Segment.",
+                help="Matikan opsi ini agar load lebih ringan memakai filter awal Segment.",
             )
+        with pre_filter_col3:
+            st.write("")
+            load_tower_schedule = st.form_submit_button("Load / Refresh Tower Schedule", width="stretch")
 
-        tower_load_requested = False
-        load_tower_schedule = st.button("Load / Refresh Tower Schedule", key="load_tower_schedule")
-        if load_tower_schedule:
-            if not tower_schedule_url_configured:
-                st.warning(
-                    "Tidak bisa memuat Tower Schedule karena link spreadsheet belum diatur di Setup DB."
-                )
-            elif not tower_load_all and not tower_pre_ultg and not tower_pre_segment:
-                st.warning("Isi ULTG atau Segment terlebih dahulu, atau centang Load semua data.")
-            else:
-                read_google_spreadsheet_query_cached.clear()
-                st.session_state["tower_schedule_loaded"] = True
-                tower_load_requested = True
+    tower_load_requested = False
+    tower_pre_ultg = ""
+    if load_tower_schedule:
+        if not tower_schedule_url_configured:
+            st.warning(
+                "Tidak bisa memuat Tower Schedule karena link spreadsheet belum diatur di Setup DB."
+            )
+        elif not tower_load_all and not tower_pre_segment:
+            st.warning("Isi Segment terlebih dahulu, atau centang Load semua data.")
+        else:
+            read_google_spreadsheet_query_cached.clear()
+            st.session_state["tower_schedule_loaded"] = True
+            tower_load_requested = True
 
     if not tower_schedule_url_configured and "tower_schedule_df" not in st.session_state:
         st.info("Isi konfigurasi Tower Schedule di Setup DB sebelum memuat data tower.")
@@ -2463,8 +2665,6 @@ with tab_tower:
                     segment_clause = _gquery_eq_any("F", segment_aliases)
                     if segment_clause:
                         tower_where_clauses.append(segment_clause)
-                if not tower_load_all and tower_pre_ultg:
-                    tower_where_clauses.append(f"G = '{tower_pre_ultg.replace(chr(39), chr(39) + chr(39))}'")
                 tower_query = "select *"
                 if tower_where_clauses:
                     tower_query += " where " + " and ".join(tower_where_clauses)
@@ -2481,8 +2681,6 @@ with tab_tower:
                 st.session_state["tower_schedule_last_query"] = tower_query
             else:
                 tower_df = st.session_state["tower_schedule_df"].copy()
-            if st.session_state.get("tower_schedule_last_query"):
-                st.caption(f"Query: {st.session_state['tower_schedule_last_query']}")
     
             missing_tower_columns = [
                 col for col in expected_tower_columns
@@ -3127,8 +3325,13 @@ with summary_container:
             fault_time_cfg=_summary_fault_dt.isoformat(timespec="seconds") if _summary_fault_dt else "",
             line_name=_ds_line.get("line_name", ""),
             gi_local=_local_gi, gi_remote=_remote_gi,
-            upt=st.session_state.get("sidebar_filter_upt", ""),
-            ultg=st.session_state.get("sidebar_filter_ultg", ""),
+            upt=_active(st.session_state.get("sidebar_filter_upt", "")) and st.session_state.get("sidebar_filter_upt", "") or "",
+            ultg=_active(st.session_state.get("sidebar_filter_ultg", "")) and st.session_state.get("sidebar_filter_ultg", "") or "",
+            upt_local=_active(st.session_state.get("sidebar_filter_upt_local", "")) and st.session_state.get("sidebar_filter_upt_local", "") or "",
+            ultg_local=_active(st.session_state.get("sidebar_filter_ultg_local", "")) and st.session_state.get("sidebar_filter_ultg_local", "") or "",
+            upt_remote=_active(st.session_state.get("sidebar_filter_upt_remote", "")) and st.session_state.get("sidebar_filter_upt_remote", "") or "",
+            ultg_remote=_active(st.session_state.get("sidebar_filter_ultg_remote", "")) and st.session_state.get("sidebar_filter_ultg_remote", "") or "",
+            segment=_active(st.session_state.get("sidebar_filter_segment", "")) and st.session_state.get("sidebar_filter_segment", "") or "",
             fault_type_result=fault_type_summary,
             high_resistance_result=st.session_state.get("high_resistance_result"),
             phasors=st.session_state.get("phasors"),
@@ -3268,6 +3471,7 @@ with summary_container:
             float((st.session_state.get("line_param") or {}).get("length_km", 0)),
             # Pilihan zona proteksi — agar Summary ikut update saat relay setting dipilih di halaman Locus
             bool(st.session_state.get(f"rx_locus_show_zone_{end_suffix}", True)),
+            st.session_state.get(f"rx_locus_zone_setting_source_{end_suffix}", "line_data"),
             st.session_state.get(f"rx_locus_substation_{end_suffix}", ""),
             st.session_state.get(f"rx_locus_bay_{end_suffix}", ""),
             st.session_state.get(f"rx_locus_setting_row_{end_suffix}", ""),
@@ -4218,6 +4422,19 @@ def render_simple_rx_locus(end_side: str):
         key=f"rx_locus_show_zone_{end_side}",
     )
     if show_zone_overlay:
+        zone_source_key = f"rx_locus_zone_setting_source_{end_side}"
+        if st.session_state.get(zone_source_key) not in ["line_data", "distance_settings"]:
+            st.session_state[zone_source_key] = "line_data"
+        zone_setting_source = st.selectbox(
+            "Sumber setting zona relay",
+            ["line_data", "distance_settings"],
+            key=zone_source_key,
+            format_func=lambda value: {
+                "line_data": "line_data (primary/secondary eksplisit)",
+                "distance_settings": "distance_settings",
+            }[value],
+            help="Gunakan line_data bila tersedia karena kolom Prim/Sec membuat satuan setting lebih jelas.",
+        )
         zone_setting_base = st.selectbox(
             "Zone setting base",
             ["primary", "secondary"],
@@ -4235,14 +4452,11 @@ def render_simple_rx_locus(end_side: str):
             st.caption(f"Konversi zona secondary -> primary memakai faktor 1/{secondary_scale:.9f}.")
 
         try:
-            distance_settings_df = read_google_spreadsheet_table_cached(
-                st.session_state.get("database_spreadsheet_url", ""),
-                st.session_state.get("distance_settings_sheet_name", "distance_settings"),
-            )
-            distance_settings_df = make_streamlit_safe_columns(distance_settings_df)
-            distance_columns = detect_locus_distance_setting_columns(distance_settings_df)
+            distance_settings_df, zone_source_cfg, zone_sheet_name = read_rx_locus_zone_settings_df(end_side)
+            distance_columns = detect_locus_distance_setting_columns(distance_settings_df, zone_setting_base)
             substation_col = distance_columns.get("substation")
             bay_col = distance_columns.get("bay")
+            st.caption(f"Zona relay dibaca dari sheet `{zone_sheet_name}` ({zone_setting_source}, base {zone_setting_base}).")
 
             substation_options = sorted_nonempty_values(distance_settings_df, substation_col)
             substation_labels = ["Semua GI/Substation"] + substation_options
@@ -4272,16 +4486,19 @@ def render_simple_rx_locus(end_side: str):
                     filtered_settings_df[substation_col].astype(str).str.strip() == selected_substation
                 ].reset_index(drop=True)
 
-            bay_labels = ["Semua Bay"] + sorted_nonempty_values(filtered_settings_df, bay_col)
-            # Guard: jika nilai bay tersimpan tidak ada di opsi (mis. setelah ganti substation), reset.
+            bay_filter_col = bay_col or distance_columns.get("line")
+            bay_labels = ["Semua Bay"] + sorted_nonempty_values(filtered_settings_df, bay_filter_col)
+            # Guard: jika nilai bay tersimpan tidak ada di opsi (mis. setelah ganti substation),
+            # coba remap dari sidebar Bay/Line. Sheet line_data sering tidak punya kolom Bay
+            # terpisah, sehingga opsi Bay memakai `Nama Line dan Nomor Line`.
             _bay_key = f"rx_locus_bay_{end_side}"
             if st.session_state.get(_bay_key) not in bay_labels:
-                st.session_state[_bay_key] = "Semua Bay"
+                st.session_state[_bay_key] = _rx_locus_match_bay_label(bay_labels, end_side) or "Semua Bay"
             with col_set2:
                 selected_bay = st.selectbox("Bay", bay_labels, key=_bay_key)
-            if selected_bay != "Semua Bay" and bay_col:
+            if selected_bay != "Semua Bay" and bay_filter_col:
                 filtered_settings_df = filtered_settings_df[
-                    filtered_settings_df[bay_col].astype(str).str.strip() == selected_bay
+                    filtered_settings_df[bay_filter_col].astype(str).str.strip() == selected_bay
                 ].reset_index(drop=True)
 
             with col_set3:
@@ -4294,7 +4511,7 @@ def render_simple_rx_locus(end_side: str):
                 filtered_settings_df = filtered_settings_df[mask].reset_index(drop=True)
 
             if filtered_settings_df.empty:
-                st.warning("Tidak ada baris distance_settings yang cocok dengan filter.")
+                st.warning(f"Tidak ada baris {zone_sheet_name} yang cocok dengan filter.")
             else:
                 row_labels = build_locus_setting_row_labels(filtered_settings_df, distance_columns)
                 _PLACEHOLDER = "— Pilih setting relay distance —"
@@ -4317,18 +4534,26 @@ def render_simple_rx_locus(end_side: str):
                     _target_line = _nv_line(_sb_line)
                     _auto_label = None
                     for _i, _lbl in enumerate(row_labels):
-                        if _nv_line(filtered_settings_df.iloc[_i][_line_col]) == _target_line:
+                        _row_line = _nv_line(filtered_settings_df.iloc[_i][_line_col])
+                        _row_tokens = re.findall(r"[A-Z0-9]+", _row_line)
+                        if _row_line == _target_line or _target_line in _row_tokens:
                             _auto_label = _lbl
                             break
-                    _setting_sync_key = f"{end_side}|{selected_substation}|{selected_bay}|{_sb_line}"
+                    _setting_sync_key = (
+                        f"{end_side}|{zone_setting_source}|{zone_setting_base}|"
+                        f"{selected_substation}|{selected_bay}|{_sb_line}"
+                    )
                     if _auto_label and _setting_sync_key != st.session_state.get(f"_rx_setting_sync_{end_side}", ""):
                         st.session_state[f"_rx_setting_sync_{end_side}"] = _setting_sync_key
                         st.session_state[f"rx_locus_setting_row_{end_side}"] = _auto_label
 
+                _setting_row_key = f"rx_locus_setting_row_{end_side}"
+                if st.session_state.get(_setting_row_key) not in [_PLACEHOLDER] + row_labels:
+                    st.session_state[_setting_row_key] = _PLACEHOLDER
                 selected_label = st.selectbox(
                     "Pilih setting relay distance",
                     [_PLACEHOLDER] + row_labels,
-                    key=f"rx_locus_setting_row_{end_side}",
+                    key=_setting_row_key,
                 )
                 if selected_label == _PLACEHOLDER:
                     st.info("Pilih setting relay distance untuk menampilkan zona proteksi.")
@@ -4357,7 +4582,7 @@ def render_simple_rx_locus(end_side: str):
                         st.warning("Baris setting terpilih belum memiliki X reach dan R reach yang cukup untuk Z1/Z2/Z3.")
         except Exception as e:
             st.warning("Setting distance relay belum dapat dibaca dari spreadsheet.")
-            st.caption("Pastikan sheet `distance_settings` tersedia pada Database Spreadsheet URL di tab Setup DB.")
+            st.caption("Pastikan sheet sumber zona relay tersedia pada Database Spreadsheet URL di tab Setup DB.")
             st.exception(e)
 
     plot_focus_mode = st.selectbox(
@@ -4381,6 +4606,7 @@ def render_simple_rx_locus(end_side: str):
     st.session_state[f"rx_locus_summary_meta_{summary_key_suffix}"] = meta
 
     st.plotly_chart(fig_locus, width="stretch")
+    render_rx_locus_literature_notes(meta)
     with st.expander("Trajectory Data", expanded=False):
         st.dataframe(
             trajectory_df.style.format(

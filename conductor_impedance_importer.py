@@ -185,6 +185,7 @@ def make_unique_columns(columns):
 
 def normalize_column_name(name: str) -> str:
     text = str(name).lower().strip()
+    text = re.sub(r"\s+", "", text)
     text = text.replace(" ", "")
     text = text.replace("_", "")
     text = text.replace("-", "")
@@ -238,6 +239,7 @@ def detect_impedance_columns(df: pd.DataFrame):
 
     detected = {
         "upt": find_column(df, ["UPT"]),
+        "voltage": find_column(df, ["TEGANGAN", "NOMINAL VOLTAGE", "VOLTAGE"]),
         "ultg": find_column(df, ["ULTG"]),
         "gi": find_column(df, ["GI"]),
         "bay_pht": find_column(df, ["BAY PHT", "BAY", "PHT", "BAY_PHT"]),
@@ -574,6 +576,7 @@ def extract_impedance_from_row(row, columns: dict):
     length = None
 
     upt = None
+    voltage = None
     ultg = None
     gi = None
     bay = None
@@ -583,6 +586,9 @@ def extract_impedance_from_row(row, columns: dict):
 
     if columns.get("upt"):
         upt = str(row[columns["upt"]])
+
+    if columns.get("voltage"):
+        voltage = str(row[columns["voltage"]])
 
     if columns.get("ultg"):
         ultg = str(row[columns["ultg"]])
@@ -629,6 +635,7 @@ def extract_impedance_from_row(row, columns: dict):
 
     return {
         "upt": upt,
+        "voltage": voltage,
         "ultg": ultg,
         "gi": gi,
         "line_number": line_number,

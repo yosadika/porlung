@@ -51,6 +51,9 @@ CASE_STATE_EXCLUDE_KEYS = {
     "case_local_dat_bytes",
     "case_remote_cfg_bytes",
     "case_remote_dat_bytes",
+    "_pending_cloud_case_archive_bytes",
+    "_pending_cloud_case_index_record",
+    "_pending_cloud_case_id",
     "runtime_credentials",
     "runtime_credentials_loaded_name",
     "runtime_gdrive_service_account",
@@ -104,6 +107,7 @@ CASE_SETTINGS_KEYS = frozenset([
     # DB Setup — URL spreadsheet dan sheet names
     "database_spreadsheet_url",
     "line_data_sheet_name",
+    "rx_locus_line_data_sheet_name",
     "cable_data_sheet_name",
     "distance_settings_sheet_name",
     "tower_schedule_url",
@@ -112,6 +116,27 @@ CASE_SETTINGS_KEYS = frozenset([
     "database_spreadsheet_url_input",
     "tower_schedule_url_setup_input",
     "tower_schedule_sheet_setup_input",
+    # Sidebar upload-end filters
+    "sidebar_filter_upt",
+    "sidebar_filter_ultg",
+    "sidebar_filter_upt_local",
+    "sidebar_filter_ultg_local",
+    "sidebar_filter_segment",
+    "sidebar_filter_gi_local",
+    "sidebar_filter_bay_line_local",
+    "sidebar_filter_bay_local",
+    "sidebar_filter_line_local",
+    "sidebar_filter_upt_remote",
+    "sidebar_filter_ultg_remote",
+    "sidebar_filter_gi_remote",
+    "sidebar_filter_bay_line_remote",
+    "sidebar_filter_bay_remote",
+    "sidebar_filter_line_remote",
+    # R-X Locus relay zone source
+    "rx_locus_zone_setting_source_local",
+    "rx_locus_zone_setting_source_remote",
+    "rx_locus_zone_setting_base_local",
+    "rx_locus_zone_setting_base_remote",
     # Signal Assignment — Local End
     "local_signal_va",
     "local_signal_vb",
@@ -243,6 +268,14 @@ def apply_runtime_credentials(payload: dict):
             ("line_data_sheet_name",),
         ),
         (
+            "rx_locus_line_data_sheet_name",
+            "R-X Locus Line Data Sheet",
+            ("spreadsheet", "rx_locus_line_data_sheet"),
+            ("spreadsheet", "rx_locus_zone_line_sheet"),
+            ("rx_locus", "line_data_sheet"),
+            ("rx_locus_line_data_sheet_name",),
+        ),
+        (
             "cable_data_sheet_name",
             "Cable Data Sheet",
             ("spreadsheet", "database_cable_sheet"),
@@ -289,6 +322,7 @@ def apply_runtime_credentials(payload: dict):
             st.session_state[state_key] = value
             widget_key = {
                 "line_data_sheet_name": "line_data_sheet_name_manual",
+                "rx_locus_line_data_sheet_name": "rx_locus_line_data_sheet_name_manual",
                 "cable_data_sheet_name": "cable_data_sheet_name_manual",
                 "distance_settings_sheet_name": "distance_settings_sheet_name_manual",
                 "tower_schedule_url": "tower_schedule_url_setup_input",

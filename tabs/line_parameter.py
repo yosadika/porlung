@@ -171,6 +171,7 @@ def render():
             z0_angle_col = detected_columns.get("z0_angle")
             corrected_columns = {
                 "upt": None if use_cable_database else detected_columns.get("upt"),
+                "voltage": None if use_cable_database else detected_columns.get("voltage"),
                 "ultg": None if use_cable_database else detected_columns.get("ultg"),
                 "gi": None if use_cable_database else detected_columns.get("gi"),
                 "line_number": None if use_cable_database else detected_columns.get("line_number"),
@@ -316,6 +317,8 @@ def render():
             with st.expander("Detail data impedansi yang dipilih", expanded=False):
                 st.json(
                     {
+                        "upt": excel_impedance_data.get("upt"),
+                        "voltage": excel_impedance_data.get("voltage"),
                         "ultg": excel_impedance_data.get("ultg"),
                         "gi": excel_impedance_data.get("gi"),
                         "line_number": excel_impedance_data.get("line_number"),

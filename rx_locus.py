@@ -73,7 +73,7 @@ def parse_distance_setting_number(value):
 def normalize_distance_setting_column(name: str):
     text = str(name or "").lower().strip()
     text = re.sub(r"\s+", "", text)
-    for old in ["(", ")", "-", "_", "/", "\\", ".", "ohm", "Ω", "\u00ce\u00a9"]:
+    for old in ["(", ")", "-", "_", "/", "\\", ".", "ohm", "Ω", "\u2126", "\u00ce\u00a9"]:
         text = text.replace(old, "")
     return text
 
@@ -92,22 +92,55 @@ def find_distance_setting_column(df: pd.DataFrame, candidates: list[str]):
     return None
 
 
-def detect_locus_distance_setting_columns(df: pd.DataFrame):
+def detect_locus_distance_setting_columns(df: pd.DataFrame, zone_setting_base: str = "primary"):
+    base = str(zone_setting_base or "primary").lower()
+    if base == "secondary":
+        z_candidates = {
+            1: ["Z1 Sec (ohm)", "Z1 Sec", "Z1/X1 (ohm)", "Z1/X1", "X1"],
+            2: ["Z2 Sec (ohm)", "Z2 Sec", "Z2/X2 (ohm)", "Z2/X2", "X2"],
+            3: ["Z3 Sec (ohm)", "Z3 Sec", "Z3/X3 (ohm)", "Z3/X3", "X3"],
+        }
+        rp_candidates = {
+            1: ["R1P Sec (ohm)", "R1P Sec", "Z1 Res Ph (ohm)", "Z1 Res Phi (ohm)", "Z1 Res Ph", "Z1 Res Phi"],
+            2: ["R2P Sec (ohm)", "R2P Sec", "Z2 Res Ph (ohm)", "Z2 Res Phi (ohm)", "Z2 Res Ph", "Z2 Res Phi"],
+            3: ["R3P Sec (ohm)", "R3P Sec", "Z3 Res Ph (ohm)", "Z3 Res Phi (ohm)", "Z3 Res Ph", "Z3 Res Phi"],
+        }
+        rg_candidates = {
+            1: ["R1G Sec (ohm)", "R1G Sec", "Z1 Res Gnd (ohm)", "Z1 Res Gnd"],
+            2: ["R2G Sec (ohm)", "R2G Sec", "Z2 Res Gnd (ohm)", "Z2 Res Gnd"],
+            3: ["R3G Sec (ohm)", "R3G Sec", "Z3 Res Gnd (ohm)", "Z3 Res Gnd"],
+        }
+    else:
+        z_candidates = {
+            1: ["Z1 Prim (ohm)", "Z1 Prim", "Z1/X1 (ohm)", "Z1/X1", "X1"],
+            2: ["Z2 Prim (ohm)", "Z2 Prim", "Z2/X2 (ohm)", "Z2/X2", "X2"],
+            3: ["Z3 Prim (ohm)", "Z3 Prim", "Z3/X3 (ohm)", "Z3/X3", "X3"],
+        }
+        rp_candidates = {
+            1: ["R1P Prim (ohm)", "R1P Prim", "Z1 Res Ph (ohm)", "Z1 Res Phi (ohm)", "Z1 Res Ph", "Z1 Res Phi"],
+            2: ["R2P Prim (ohm)", "R2P Prim", "Z2 Res Ph (ohm)", "Z2 Res Phi (ohm)", "Z2 Res Ph", "Z2 Res Phi"],
+            3: ["R3P Prim (ohm)", "R3P Prim", "Z3 Res Ph (ohm)", "Z3 Res Phi (ohm)", "Z3 Res Ph", "Z3 Res Phi"],
+        }
+        rg_candidates = {
+            1: ["R1G Prim (ohm)", "R1G Prim", "Z1 Res Gnd (ohm)", "Z1 Res Gnd"],
+            2: ["R2G Prim (ohm)", "R2G Prim", "Z2 Res Gnd (ohm)", "Z2 Res Gnd"],
+            3: ["R3G Prim (ohm)", "R3G Prim", "Z3 Res Gnd (ohm)", "Z3 Res Gnd"],
+        }
     return {
         "substation": find_distance_setting_column(df, ["Substation", "GI"]),
-        "bay": find_distance_setting_column(df, ["Bay"]),
-        "line": find_distance_setting_column(df, ["Line"]),
+        "bay": find_distance_setting_column(df, ["Bay", "Nama Line", "Nama Bay"]),
+        "line": find_distance_setting_column(df, ["Nomor Line", "No Line", "Line", "Nama Line dan Nomor Line"]),
         "merk": find_distance_setting_column(df, ["Merk", "Brand"]),
         "type": find_distance_setting_column(df, ["Type"]),
-        "z1_x": find_distance_setting_column(df, ["Z1/X1 (ohm)", "Z1/X1", "X1"]),
-        "z2_x": find_distance_setting_column(df, ["Z2/X2 (ohm)", "Z2/X2", "X2"]),
-        "z3_x": find_distance_setting_column(df, ["Z3/X3 (ohm)", "Z3/X3", "X3"]),
-        "z1_res_phi": find_distance_setting_column(df, ["Z1 Res Phi (ohm)", "Z1 Res Phi"]),
-        "z1_res_gnd": find_distance_setting_column(df, ["Z1 Res Gnd (ohm)", "Z1 Res Gnd"]),
-        "z2_res_phi": find_distance_setting_column(df, ["Z2 Res Phi (ohm)", "Z2 Res Phi"]),
-        "z2_res_gnd": find_distance_setting_column(df, ["Z2 Res Gnd (ohm)", "Z2 Res Gnd"]),
-        "z3_res_phi": find_distance_setting_column(df, ["Z3 Res Phi (ohm)", "Z3 Res Phi"]),
-        "z3_res_gnd": find_distance_setting_column(df, ["Z3 Res Gnd (ohm)", "Z3 Res Gnd"]),
+        "z1_x": find_distance_setting_column(df, z_candidates[1]),
+        "z2_x": find_distance_setting_column(df, z_candidates[2]),
+        "z3_x": find_distance_setting_column(df, z_candidates[3]),
+        "z1_res_phi": find_distance_setting_column(df, rp_candidates[1]),
+        "z1_res_gnd": find_distance_setting_column(df, rg_candidates[1]),
+        "z2_res_phi": find_distance_setting_column(df, rp_candidates[2]),
+        "z2_res_gnd": find_distance_setting_column(df, rg_candidates[2]),
+        "z3_res_phi": find_distance_setting_column(df, rp_candidates[3]),
+        "z3_res_gnd": find_distance_setting_column(df, rg_candidates[3]),
     }
 
 

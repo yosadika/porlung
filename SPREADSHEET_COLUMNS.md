@@ -10,25 +10,30 @@ URL dikonfigurasi via `database_spreadsheet_url`. Berisi dua sheet utama.
 
 ---
 
-### Sheet: `line_impedance`
+### Sheet: `line_impedance` / `line_data`
 
-Default sheet name: `line_impedance` (dapat diubah via `line_data_sheet_name`).  
-Dibaca oleh `conductor_impedance_importer.py`, ditampilkan di `tabs/line_parameter.py`, difilter di sidebar `app.py`.
+Default sheet name untuk parameter saluran: `line_impedance` (dapat diubah via `line_data_sheet_name` / credentials `database_line_sheet`).  
+Dibaca oleh `conductor_impedance_importer.py`, ditampilkan di `tabs/line_parameter.py`, difilter di sidebar `app.py`. Sheet `line_data` dipakai terpisah sebagai sumber utama zona R-X Locus via `rx_locus_line_data_sheet_name` / credentials `rx_locus_line_data_sheet` bila berisi kolom setting relay primary/secondary eksplisit.
 
 #### Kolom Identitas
 
 | Kolom di Spreadsheet | Kandidat Nama Alternatif | Dipakai Untuk |
 |---|---|---|
+| `No` | — | Nomor urut spreadsheet; diabaikan oleh kalkulasi |
 | `UPT` | — | Identifikasi Unit Pelaksana Transmisi (opsional) |
+| `Tegangan` | `NOMINAL VOLTAGE`, `VOLTAGE` | Metadata level tegangan; ditampilkan pada detail baris bila tersedia |
 | `ULTG` | — | Filter sidebar ULTG |
-| `GI A` | `GIA` | Terminal GI A (sisi lokal) |
-| `GI B` | `GIB` | Terminal GI B (sisi remote) |
-| `BAY PHT` | `BAY`, `PHT`, `BAY_PHT` | Identifikasi bay/PHT; dipakai sebagai GI B fallback |
+| `GI` | `GI A`, `GIA` | Identifikasi GI pada baris line impedance |
+| `BAY` | `BAY PHT`, `PHT`, `BAY_PHT` | Identifikasi bay/PHT; dipakai sebagai fallback nama line |
 | `SEGMENT` | `NAMA SEGMENT`, `NAMA SEGMEN` | Primary identifier nama saluran |
 | `NAMA SALURAN` | `LINE NAME` | Nama saluran alternatif |
 | `LINE` | `NO LINE`, `SIRKIT`, `CIRCUIT` | Nomor line/circuit |
 | `JENIS KONDUKTOR` | `KONDUKTOR`, `CONDUCTOR TYPE`, `TYPE` | Tipe konduktor |
 | `JUMLAH SIRKIT` | `JLH`, `JLH SIRKIT`, `CIRCUIT` | Jumlah sirkit |
+
+Struktur `line_impedance` aktif:
+
+`No`, `UPT`, `Tegangan`, `ULTG`, `GI`, `BAY`, `LINE`, `SEGMENT`, `PANJANG KONDUKTOR (km)`, `JENIS KONDUKTOR`, `JUMLAH SIRKIT`, `Z1 REAL`, `Z1 IMG`, `Impedansi Z1`, `Z1 ABS`, `Z1 ANGLE`, `Z0 REAL`, `Z0 IMG`, `Impedansi Z0`, `Z0 ABS`, `Z0 ANGLE`.
 
 #### Kolom Geometri
 
@@ -74,6 +79,40 @@ Dibaca oleh `conductor_impedance_importer.py`, ditampilkan di `tabs/line_paramet
 | `line_database_df` | DataFrame penuh dari sheet setelah load |
 | `excel_impedance_data` | Dict hasil ekstraksi baris yang dipilih user |
 | `excel_impedance_source` | String sumber data (`"Database Excel Line Data"` dst.) |
+
+#### Kolom Setting Relay Distance Opsional (`line_data`)
+
+Jika sheet `line_data` menyediakan setting relay distance dalam satuan eksplisit, R-X Locus memakai kolom berikut:
+
+| Kolom di Spreadsheet | Base | Dipakai Untuk |
+|---|---|---|
+| `GI` | — | Filter GI/Substation |
+| `Nama Line` | `Bay`, `Nama Bay` | Filter Bay/nama line relay |
+| `Nomor Line` | `No Line`, `Line`, `Nama Line dan Nomor Line` | Nomor line untuk auto-select setting; `Nama Line dan Nomor Line` hanya fallback format lama |
+| `MERK` | — | Label setting |
+| `Z1 Sec (Ω)`, `Z2 Sec (Ω)`, `Z3 Sec (Ω)` | secondary | X reach Zone 1/2/3 relay secondary |
+| `R1P Sec (Ω)`, `R2P Sec (Ω)`, `R3P Sec (Ω)` | secondary | Resistive reach phase fault Zone 1/2/3 |
+| `R1G Sec (Ω)`, `R2G Sec (Ω)`, `R3G Sec (Ω)` | secondary | Resistive reach ground fault Zone 1/2/3 |
+| `Z1 Prim (Ω)`, `Z2 Prim (Ω)`, `Z3 Prim (Ω)` | primary | X reach Zone 1/2/3 primary |
+| `R1P Prim (Ω)`, `R2P Prim (Ω)`, `R3P Prim (Ω)` | primary | Resistive reach phase fault Zone 1/2/3 |
+| `R1G Prim (Ω)`, `R2G Prim (Ω)`, `R3G Prim (Ω)` | primary | Resistive reach ground fault Zone 1/2/3 |
+
+> R-X Locus default memakai sumber `line_data` karena kolom `Sec`/`Prim` tidak ambigu. `distance_settings` tetap tersedia sebagai fallback.
+> Struktur baru memisahkan `Nama Line` dan `Nomor Line`, sehingga filter R-X Locus mengikuti pola sheet lain: GI -> Bay/Nama Line -> Nomor Line. Format lama `Nama Line dan Nomor Line` masih didukung sebagai fallback.
+
+#### Guardrail Detail `line_data` untuk R-X Locus
+
+Struktur `line_data` aktif:
+
+`No`, `UPT`, `Tegangan`, `ULTG`, `GI`, `Nama Line`, `Nomor Line`, `SEGMENT`, `Panjang (km)`, `Jenis Konduktor`, `Jumlah Sirkit`, `MERK`, `VT Ratio primary`, `VT Ratio Secondary`, `CT Ratio Primary`, `CT Ratio Secondary`, `Z1 Sec (ohm)`, `tZ1 (s)`, `R1P Sec (ohm)`, `R1G Sec (ohm)`, `Z2 Sec (ohm)`, `tZ2 (s)`, `R2P Sec (ohm)`, `R2G Sec (ohm)`, `Z3 Sec (ohm)`, `tZ3 (s)`, `R3P Sec (ohm)`, `R3G Sec (ohm)`, `Line Impedance (ohm/km)`, `VTR/CTR`, `Z1 Prim (ohm)`, `tZ1 (s)`, `R1P Prim (ohm)`, `R1G Prim (ohm)`, `Z2 Prim (ohm)`, `tZ2 (s)`, `R2P Prim (ohm)`, `R2G Prim (ohm)`, `Z3 Prim (ohm)`, `tZ3 (s)`, `R3P Prim (ohm)`, `R3G Prim (ohm)`, `Z Line Prim (ohm)`, `R Load Prim (ohm)`, `Real/ABS`.
+
+- `Nama Line` adalah opsi Bay/nama line pada UI R-X Locus. Alias lama `Bay` dan `Nama Bay` tetap diterima.
+- `Nomor Line` adalah nomor line untuk auto-select baris relay. Alias lama `No Line`, `Line`, dan `Nama Line dan Nomor Line` tetap fallback.
+- Kolom `Prim` dipakai saat `rx_locus_zone_setting_base_* = "primary"`.
+- Kolom `Sec` dipakai saat `rx_locus_zone_setting_base_* = "secondary"`, lalu dikonversi ke primary ohm memakai CT/VT dari Signal Assignment aktif, bukan memakai rasio pada spreadsheet.
+- Kolom waktu `tZ*`, `Z Line Prim`, `R Load Prim`, `Line Impedance`, `VTR/CTR`, `Real/ABS`, `UPT`, `Tegangan`, `ULTG`, `SEGMENT`, `Panjang`, `Jenis Konduktor`, dan `Jumlah Sirkit` adalah metadata/audit untuk saat ini; belum menentukan polygon overlay.
+- Sheet khusus zona R-X adalah `rx_locus_line_data_sheet_name` / credentials `rx_locus_line_data_sheet` dengan default `line_data`. Jangan disamakan dengan `line_data_sheet_name` / `database_line_sheet` yang dipakai Line Parameter.
+- Overlay zona R-X adalah visualisasi engineering quadrilateral/polygonal berbasis `R reach` dan `X reach`; bukan replica penuh relay vendor sampai tilt reactance, directional supervision, left/right blinder detail, load encroachment, memory/polarizing quantity, dan logic pabrikan dimodelkan.
 
 ---
 
@@ -129,6 +168,10 @@ Dibaca oleh `rx_locus.py`, difilter di sidebar `app.py`.
 | `rx_locus_bay_local` | Bay lokal yang dipilih |
 | `rx_locus_substation_remote` | GI remote yang dipilih |
 | `rx_locus_bay_remote` | Bay remote yang dipilih |
+| `rx_locus_line_data_sheet_name` | Nama sheet `line_data` khusus sumber zona R-X Locus |
+| `rx_locus_zone_setting_source_local` / `remote` | Source zona relay: `line_data` atau `distance_settings` |
+| `rx_locus_zone_setting_base_local` / `remote` | Base satuan setting: `primary` atau `secondary` |
+| `rx_locus_setting_row_local` / `remote` | Label baris relay yang dipilih; disimpan ke case dan dipakai rebuild figure |
 
 ---
 
@@ -294,12 +337,12 @@ Dataset berlabel untuk pelatihan ML penentuan penyebab gangguan. **Ditulis** ole
 
 **Upsert berdasarkan `case_id` (kolom A):** `case_id = sha1(line_name|fault_time_cfg)[:16]`. Bila `case_id` cocok dengan baris yang ada → baris **di-update** (bukan duplikat); bila tidak → append. Re-analisis rekaman yang sama (line + waktu kejadian sama) memperbarui baris yang sama. `case_id` kosong (tak ada identitas) → selalu append.
 
-Dirakit oleh `fault_cause_dataset.build_fault_cause_feature_row()` (43 kolom, `DATASET_COLUMNS`):
+Dirakit oleh `fault_cause_dataset.build_fault_cause_feature_row()` (48 kolom, `DATASET_COLUMNS`):
 
 | Grup | Kolom |
 |---|---|
 | **Kunci unik** | `case_id` (kolom A — upsert key) |
-| Metadata | `timestamp_analyzed`, `fault_time_cfg`, `line_name`, `gi_local`, `gi_remote`, `upt`, `ultg` |
+| Metadata | `timestamp_analyzed`, `fault_time_cfg`, `line_name`, `gi_local`, `gi_remote`, `upt`, `ultg`, `upt_local`, `ultg_local`, `upt_remote`, `ultg_remote`, `segment` |
 | Fault type | `fault_type`, `n_phases`, `ground`, `ft_confidence` |
 | Komponen simetris | `I0_A`,`I1_A`,`I2_A`, `r_i2_i1`,`r_i0_i1`,`r_i0_i2`, `ang_i2_i1_deg`,`ang_i0_i1_deg`, `r_v2_v1`,`r_v0_v1`, `Z1_ohm`,`Z2_ohm`,`Z0_ohm` |
 | Resistansi | `rf_est_ohm`, `hr_suspected` |
@@ -323,6 +366,10 @@ Simpan/muat case via spreadsheet — **TANPA Google Drive** (service account aku
 | `case_id` | `sha1(line_name\|fault_time_cfg)[:16]` — kunci upsert |
 | `case_name` | Nama case (slug line) |
 | `line_name`, `gi_local`, `gi_remote` | Identitas saluran |
+| `upt`, `ultg` | Legacy alias pilihan UPT/ULTG Local End |
+| `upt_local`, `ultg_local` | Pilihan filter UPT/ULTG Local End saat case disimpan; dipakai sebagai fallback restore filter saat load dari spreadsheet |
+| `upt_remote`, `ultg_remote` | Pilihan filter UPT/ULTG Remote End saat case disimpan |
+| `segment` | Pilihan filter Segment Local End saat case disimpan |
 | `fault_time_cfg` | Timestamp CFG (trigger/start) |
 | `saved_at` | ISO timestamp saat disimpan (untuk urut daftar) |
 | `filename` | Nama file ZIP internal |

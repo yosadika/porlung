@@ -34,7 +34,8 @@ DATASET_SHEET_NAME = "fault_cause"
 # `case_id` (kolom A) = kunci unik untuk upsert (update baris yang cocok, bukan duplikat).
 DATASET_COLUMNS = [
     "case_id",
-    "timestamp_analyzed", "fault_time_cfg", "line_name", "gi_local", "gi_remote", "upt", "ultg",
+    "timestamp_analyzed", "fault_time_cfg", "line_name", "gi_local", "gi_remote",
+    "upt", "ultg",
     "fault_type", "n_phases", "ground", "ft_confidence",
     "I0_A", "I1_A", "I2_A", "r_i2_i1", "r_i0_i1", "r_i0_i2",
     "ang_i2_i1_deg", "ang_i0_i1_deg", "r_v2_v1", "r_v0_v1",
@@ -47,6 +48,7 @@ DATASET_COLUMNS = [
     "se_distance_km", "de_distance_km", "de_quality",
     "predicted_cause", "predicted_score",
     "confirmed_cause",
+    "upt_local", "ultg_local", "upt_remote", "ultg_remote", "segment",
 ]
 
 
@@ -95,6 +97,11 @@ def build_fault_cause_feature_row(
     gi_remote: str,
     upt: str,
     ultg: str,
+    upt_local: str,
+    ultg_local: str,
+    upt_remote: str,
+    ultg_remote: str,
+    segment: str,
     fault_type_result: dict,
     high_resistance_result: dict,
     phasors: dict,
@@ -137,6 +144,11 @@ def build_fault_cause_feature_row(
         "gi_remote": gi_remote or "",
         "upt": upt or "",
         "ultg": ultg or "",
+        "upt_local": upt_local or upt or "",
+        "ultg_local": ultg_local or ultg or "",
+        "upt_remote": upt_remote or "",
+        "ultg_remote": ultg_remote or "",
+        "segment": segment or "",
         "fault_type": fault_type,
         "n_phases": n_phases,
         "ground": int(bool(ground)),
