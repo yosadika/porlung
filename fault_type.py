@@ -300,13 +300,36 @@ def detect_fault_type(
     current_balance_ratio = min_current / max(max_current, 1e-9)
     voltage_balance_ratio = min_voltage / max(max_voltage, 1e-9)
 
+    sorted_currents = sorted(currents.items(), key=lambda item: item[1], reverse=True)
+    dominant_phase_pair = sorted([sorted_currents[0][0], sorted_currents[1][0]])
+    dominant_pair_balance_ratio = sorted_currents[1][1] / max(sorted_currents[0][1], 1e-9)
+    non_dominant_current_ratio = sorted_currents[2][1] / max(sorted_currents[1][1], 1e-9)
+    ground_ratio_small_for_phase_phase = (
+        ground_ratio_to_max_current <= min(0.10, max(ground_current_threshold, 0.03))
+        and ground_ratio_to_avg_current <= 0.10
+    )
+    dominant_phase_phase_candidate = (
+        dominant_pair_balance_ratio >= 0.50
+        and non_dominant_current_ratio <= 0.25
+        and sorted_currents[1][1] >= max(current_rise_threshold * min_current, 0.05 * max_current)
+        and ground_ratio_small_for_phase_phase
+    )
+
     is_three_phase_candidate = (
         current_balance_ratio >= 0.60
         and len(faulted_by_current) >= 2
         and not ground_involved
     )
 
-    if is_three_phase_candidate:
+    if dominant_phase_phase_candidate:
+        pair = "".join(dominant_phase_pair)
+        if pair == "AC":
+            pair = "CA"
+        fault_type = pair
+        faulted_phases = dominant_phase_pair
+        ground_involved = False
+
+    elif is_three_phase_candidate:
         fault_type = "ABC"
         faulted_phases = ["A", "B", "C"]
 
@@ -393,6 +416,10 @@ def detect_fault_type(
             "ground_involved_by_delta": ground_involved_by_delta,
             "current_balance_ratio": current_balance_ratio,
             "voltage_balance_ratio": voltage_balance_ratio,
+            "dominant_phase_phase_candidate": dominant_phase_phase_candidate,
+            "dominant_pair_balance_ratio": dominant_pair_balance_ratio,
+            "non_dominant_current_ratio": non_dominant_current_ratio,
+            "ground_ratio_small_for_phase_phase": ground_ratio_small_for_phase_phase,
             "faulted_by_current": faulted_by_current,
             "faulted_by_voltage": faulted_by_voltage,
             "prefault_available": prefault_available,
@@ -489,6 +516,22 @@ def build_fault_type_metrics_dataframe(result: dict):
         {
             "Metric": "Voltage Balance Ratio",
             "Value": metrics["voltage_balance_ratio"],
+        },
+        {
+            "Metric": "Dominant Phase-Phase Candidate",
+            "Value": metrics["dominant_phase_phase_candidate"],
+        },
+        {
+            "Metric": "Dominant Pair Balance Ratio",
+            "Value": metrics["dominant_pair_balance_ratio"],
+        },
+        {
+            "Metric": "Non-Dominant Current Ratio",
+            "Value": metrics["non_dominant_current_ratio"],
+        },
+        {
+            "Metric": "Ground Small for Phase-Phase",
+            "Value": metrics["ground_ratio_small_for_phase_phase"],
         },
         {
             "Metric": "Faulted by Current",

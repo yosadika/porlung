@@ -4,6 +4,7 @@ import cmath
 import re
 import textwrap
 import hashlib
+import html
 from datetime import datetime
 import numpy as np
 import pandas as pd
@@ -1018,6 +1019,134 @@ with st.sidebar.expander("Upload Remote End COMTRADE", expanded=(_remote_has_cfg
 def _sb_ia(v):
     return bool(v) and v != "Semua" and not v.startswith("Pilih ")
 
+
+def _ratio_value(value):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or parsed <= 0:
+        return None
+    return parsed
+
+
+def _norm_line_number(value):
+    try:
+        parsed = float(value)
+        if parsed == int(parsed):
+            return str(int(parsed))
+    except (TypeError, ValueError):
+        pass
+    return str(value or "").strip().upper()
+
+
+def _line_data_row_for_sidebar(end_side: str):
+    database_url = str(st.session_state.get("database_spreadsheet_url", "") or "").strip()
+    if not database_url:
+        return None, {}
+    gi = str(st.session_state.get(f"sidebar_filter_gi_{end_side}", "") or "").strip()
+    bay = str(st.session_state.get(f"sidebar_filter_bay_{end_side}", "") or "").strip()
+    line = str(st.session_state.get(f"sidebar_filter_line_{end_side}", "") or "").strip()
+    if not any(_sb_ia(value) for value in [gi, bay, line]):
+        return None, {}
+    try:
+        sheet_name = st.session_state.get("rx_locus_line_data_sheet_name", "line_data") or "line_data"
+        line_df = read_google_spreadsheet_table_cached(database_url, sheet_name)
+        line_df = make_streamlit_safe_columns(line_df)
+    except Exception:
+        return None, {}
+    if line_df.empty:
+        return None, {}
+
+    columns = {
+        "gi": find_column(line_df, ["GI", "Substation"]),
+        "bay": find_column(line_df, ["Nama Line", "BAY", "Bay", "Nama Bay"]),
+        "line": find_column(line_df, ["Nomor Line", "No Line", "LINE", "Line", "Nama Line dan Nomor Line"]),
+        "vt_primary": find_column(line_df, ["VT Ratio primary", "VT Ratio Primary", "VT Primary"]),
+        "vt_secondary": find_column(line_df, ["VT Ratio Secondary", "VT Secondary"]),
+        "ct_primary": find_column(line_df, ["CT Ratio Primary", "CT Primary"]),
+        "ct_secondary": find_column(line_df, ["CT Ratio Secondary", "CT Secondary"]),
+    }
+
+    filtered_df = line_df.copy()
+    if _sb_ia(gi) and columns["gi"]:
+        filtered_df = filtered_df[
+            filtered_df[columns["gi"]].astype(str).str.strip().str.upper() == gi.upper()
+        ]
+    if _sb_ia(bay) and columns["bay"]:
+        filtered_df = filtered_df[
+            filtered_df[columns["bay"]].astype(str).str.strip().str.upper() == bay.upper()
+        ]
+    if _sb_ia(line) and columns["line"]:
+        target_line = _norm_line_number(line)
+        filtered_df = filtered_df[
+            filtered_df[columns["line"]].astype(str).map(_norm_line_number) == target_line
+        ]
+    if filtered_df.empty:
+        return None, columns
+    return filtered_df.iloc[0], columns
+
+
+def _apply_line_data_ratio_fallback(end_side: str, transformer_data: dict) -> dict:
+    updated = dict(transformer_data or {})
+    needs_ct = updated.get("ct_ratio_source") != "CFG"
+    needs_vt = updated.get("vt_ratio_source") != "CFG"
+    if not needs_ct and not needs_vt:
+        return updated
+
+    row, columns = _line_data_row_for_sidebar(end_side)
+    if row is None:
+        return updated
+
+    if needs_ct:
+        ct_primary = _ratio_value(row.get(columns.get("ct_primary"))) if columns.get("ct_primary") else None
+        ct_secondary = _ratio_value(row.get(columns.get("ct_secondary"))) if columns.get("ct_secondary") else None
+        if ct_primary and ct_secondary:
+            updated["ct_primary"] = ct_primary
+            updated["ct_secondary"] = ct_secondary
+            updated["ct_ratio_source"] = "line_data"
+    if needs_vt:
+        vt_primary = _ratio_value(row.get(columns.get("vt_primary"))) if columns.get("vt_primary") else None
+        vt_secondary = _ratio_value(row.get(columns.get("vt_secondary"))) if columns.get("vt_secondary") else None
+        if vt_primary and vt_secondary:
+            updated["vt_primary"] = vt_primary
+            updated["vt_secondary"] = vt_secondary
+            updated["vt_ratio_source"] = "line_data"
+
+    return updated
+
+
+def _seed_signal_ratio_widget_values(end_side: str, transformer_data: dict) -> None:
+    key_prefix = "local_signal" if end_side == "local" else "remote"
+    signature = (
+        st.session_state.get(f"sidebar_filter_gi_{end_side}", ""),
+        st.session_state.get(f"sidebar_filter_bay_{end_side}", ""),
+        st.session_state.get(f"sidebar_filter_line_{end_side}", ""),
+        transformer_data.get("ct_primary"),
+        transformer_data.get("ct_secondary"),
+        transformer_data.get("vt_primary"),
+        transformer_data.get("vt_secondary"),
+        transformer_data.get("ct_ratio_source"),
+        transformer_data.get("vt_ratio_source"),
+    )
+    marker_key = f"{end_side}_line_data_ratio_seed_signature"
+    if st.session_state.get(marker_key) == signature:
+        return
+    if transformer_data.get("ct_ratio_source") == "line_data":
+        st.session_state[f"{key_prefix}_ct_primary"] = float(transformer_data.get("ct_primary", 800.0))
+        st.session_state[f"{key_prefix}_ct_secondary"] = float(transformer_data.get("ct_secondary", 1.0))
+    if transformer_data.get("vt_ratio_source") == "line_data":
+        st.session_state[f"{key_prefix}_vt_primary"] = float(transformer_data.get("vt_primary", 150000.0))
+        st.session_state[f"{key_prefix}_vt_secondary"] = float(transformer_data.get("vt_secondary", 100.0))
+    if transformer_data.get("ct_ratio_source") == "line_data" or transformer_data.get("vt_ratio_source") == "line_data":
+        if end_side == "local":
+            for state_key in ["assigned_df", "local_signal_assignment_cache_key"]:
+                st.session_state.pop(state_key, None)
+        else:
+            for state_key in ["remote_assigned_df", "remote_signal_assignment_cache_key"]:
+                st.session_state.pop(state_key, None)
+    st.session_state[marker_key] = signature
+
 _sb_ultg  = st.session_state.get("sidebar_filter_ultg", "")
 _sb_seg   = st.session_state.get("sidebar_filter_segment", "")
 _sb_gi_l  = st.session_state.get("sidebar_filter_gi_local", "")
@@ -1187,6 +1316,8 @@ try:
 
     auto_assignment = detect_voltage_current_channels(df, metadata)
     auto_transformer_data = get_auto_transformer_data(metadata)
+    auto_transformer_data = _apply_line_data_ratio_fallback("local", auto_transformer_data)
+    _seed_signal_ratio_widget_values("local", auto_transformer_data)
     auto_recorded_side = detect_recorded_side(metadata)
 
     st.session_state["local_metadata"] = metadata
@@ -1278,6 +1409,8 @@ with tab_remote:
                 )
                 remote_auto_assignment = detect_voltage_current_channels(remote_df, remote_metadata)
                 remote_auto_transformer_data = get_auto_transformer_data(remote_metadata)
+                remote_auto_transformer_data = _apply_line_data_ratio_fallback("remote", remote_auto_transformer_data)
+                _seed_signal_ratio_widget_values("remote", remote_auto_transformer_data)
                 remote_auto_recorded_side = detect_recorded_side(remote_metadata)
                 st.session_state["remote_metadata"] = remote_metadata
                 st.session_state["remote_auto_assignment"] = remote_auto_assignment
@@ -1766,6 +1899,46 @@ with tab_remote:
             with st.expander("Remote Fault Type Detection Detail"):
                 st.dataframe(remote_fault_type_df, width="stretch")
 
+            st.markdown("### Grafik Perbandingan Fasor RMS")
+            remote_metrics = remote_fault_type_result["metrics"]
+            remote_voltage_bar_df = pd.DataFrame(
+                {
+                    "Phase": ["A", "B", "C"],
+                    "Voltage RMS": [
+                        remote_metrics["Va"],
+                        remote_metrics["Vb"],
+                        remote_metrics["Vc"],
+                    ],
+                }
+            )
+            remote_current_bar_df = pd.DataFrame(
+                {
+                    "Phase": ["A", "B", "C", "Ground IE"],
+                    "Current RMS": [
+                        remote_metrics["Ia"],
+                        remote_metrics["Ib"],
+                        remote_metrics["Ic"],
+                        remote_metrics["IE"],
+                    ],
+                }
+            )
+            remote_fig_vbar = px.bar(
+                remote_voltage_bar_df,
+                x="Phase",
+                y="Voltage RMS",
+                title="Perbandingan Tegangan RMS per Fasa - Remote",
+                text_auto=".2f",
+            )
+            st.plotly_chart(remote_fig_vbar, width="stretch")
+            remote_fig_ibar = px.bar(
+                remote_current_bar_df,
+                x="Phase",
+                y="Current RMS",
+                title="Perbandingan Arus RMS per Fasa dan Ground - Remote",
+                text_auto=".2f",
+            )
+            st.plotly_chart(remote_fig_ibar, width="stretch")
+
 with tab_summary:
     summary_container = st.container()
 
@@ -1838,6 +2011,19 @@ def get_rx_locus_context_from_session(end_side: str):
     }, None
 
 
+RX_LOCUS_LOOP_OPTIONS = ["AG", "BG", "CG", "AB", "BC", "CA"]
+
+
+def _sync_rx_locus_loop_to_default(end_side: str, default_loop: str):
+    default_loop = default_loop if default_loop in RX_LOCUS_LOOP_OPTIONS else "AG"
+    loop_key = f"rx_locus_loop_{end_side}"
+    signature_key = f"rx_locus_default_loop_signature_{end_side}"
+
+    if st.session_state.get(signature_key) != default_loop:
+        st.session_state[loop_key] = default_loop
+        st.session_state[signature_key] = default_loop
+
+
 def _rx_locus_zone_source_config(end_side: str):
     key = f"rx_locus_zone_setting_source_{end_side}"
     source = st.session_state.get(key, "line_data")
@@ -1867,6 +2053,88 @@ def read_rx_locus_zone_settings_df(end_side: str):
         sheet_name,
     )
     return make_streamlit_safe_columns(df), cfg, sheet_name
+
+
+def _summary_sidebar_relay_note(end_side: str) -> str:
+    """Return catatan MERK/Type relay dari line_data berdasarkan filter sidebar end."""
+    database_url = str(st.session_state.get("database_spreadsheet_url", "") or "").strip()
+    if not database_url:
+        return ""
+    sidebar_gi = str(st.session_state.get(f"sidebar_filter_gi_{end_side}", "") or "").strip()
+    sidebar_bay = str(st.session_state.get(f"sidebar_filter_bay_{end_side}", "") or "").strip()
+    sidebar_line = str(st.session_state.get(f"sidebar_filter_line_{end_side}", "") or "").strip()
+    if not any(_sb_ia(v) for v in [sidebar_gi, sidebar_bay, sidebar_line]):
+        return ""
+
+    def _nv_relay(value):
+        try:
+            f = float(value)
+            if f == int(f):
+                return str(int(f))
+        except (ValueError, TypeError):
+            pass
+        return str(value or "").strip().upper()
+
+    try:
+        sheet_name = st.session_state.get("rx_locus_line_data_sheet_name", "line_data") or "line_data"
+        relay_df = read_google_spreadsheet_table_cached(database_url, sheet_name)
+        relay_df = make_streamlit_safe_columns(relay_df)
+        distance_columns = detect_locus_distance_setting_columns(relay_df, "primary")
+        substation_col = distance_columns.get("substation")
+        bay_col = distance_columns.get("bay")
+        line_col = distance_columns.get("line")
+        merk_col = distance_columns.get("merk")
+        type_col = distance_columns.get("type")
+        if relay_df.empty or not any([merk_col, type_col]):
+            return ""
+
+        filtered_df = relay_df.copy()
+        if _sb_ia(sidebar_gi) and substation_col and substation_col in filtered_df.columns:
+            filtered_df = filtered_df[
+                filtered_df[substation_col].astype(str).str.strip().str.upper() == sidebar_gi.upper()
+            ]
+        if _sb_ia(sidebar_bay) and bay_col and bay_col in filtered_df.columns:
+            filtered_df = filtered_df[
+                filtered_df[bay_col].astype(str).str.strip().str.upper() == sidebar_bay.upper()
+            ]
+        if _sb_ia(sidebar_line) and line_col and line_col in filtered_df.columns:
+            target_line = _nv_relay(sidebar_line)
+            filtered_df = filtered_df[
+                filtered_df[line_col].astype(str).map(_nv_relay) == target_line
+            ]
+        if filtered_df.empty:
+            return ""
+
+        relay_row = filtered_df.iloc[0]
+        merk = str(relay_row.get(merk_col, "") if merk_col else "").strip()
+        relay_type = str(relay_row.get(type_col, "") if type_col else "").strip()
+        relay_parts = [part for part in [merk, relay_type] if part and part.lower() not in ("nan", "none")]
+        if not relay_parts:
+            return ""
+        return " / ".join(relay_parts)
+    except Exception:
+        return ""
+
+
+def _render_summary_record_metric(label: str, value: str, note: str = "") -> None:
+    label_html = html.escape(str(label or "-"))
+    value_html = html.escape(str(value or "-"))
+    note_html = html.escape(str(note or ""))
+    note_block = (
+        f'<div style="font-size:0.82rem;line-height:1.15;color:#7b8190;margin-top:0.12rem;">{note_html}</div>'
+        if note_html
+        else ""
+    )
+    st.markdown(
+        f"""
+<div style="margin:0;padding:0;">
+  <div style="font-size:0.875rem;line-height:1.2;color:#111827;margin:0 0 0.22rem 0;">{label_html}</div>
+  <div style="font-size:2rem;line-height:1.05;font-weight:400;color:#111827;margin:0;padding:0;">{value_html}</div>
+  {note_block}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
 
 def _rx_locus_normalized_text(value) -> str:
@@ -2039,7 +2307,8 @@ def build_rx_locus_figure_from_session(end_side: str):
     if message:
         return None, None, None, message
 
-    loop_options = ["AG", "BG", "CG", "AB", "BC", "CA"]
+    loop_options = RX_LOCUS_LOOP_OPTIONS
+    _sync_rx_locus_loop_to_default(end_side, ctx["default_loop"])
     loop_name = st.session_state.get(f"rx_locus_loop_{end_side}", ctx["default_loop"])
     if loop_name not in loop_options:
         loop_name = ctx["default_loop"] if ctx["default_loop"] in loop_options else "AG"
@@ -2579,12 +2848,16 @@ with tab_ml:
                     st.session_state["summary_waveform_signatures"] = {}
                 st.session_state["_wf_sig_key"] = _ml_wf_key
 
+        _ml_single_for_cause = (
+            st.session_state.get("single_ended_result")
+            or st.session_state.get("two_ended_local_single_result")
+        )
         _ml_estimated_cause, _ml_cause_detail = estimate_summary_disturbance_cause(
             st.session_state.get("fault_type_result", {}),
             st.session_state.get("high_resistance_result"),
             phasors=st.session_state.get("phasors"),
             prefault_phasors=st.session_state.get("prefault_phasors"),
-            single_result=st.session_state.get("single_ended_result"),
+            single_result=_ml_single_for_cause,
             two_result=st.session_state.get("two_ended_result"),
             two_quality=st.session_state.get("two_ended_quality"),
             line_param=_ml_line,
@@ -2630,7 +2903,7 @@ with tab_ml:
                 fault_month=_ml_fault_month,
                 weather_context=st.session_state.get("summary_weather_context"),
                 waveform_signatures=st.session_state.get("summary_waveform_signatures"),
-                single_result=st.session_state.get("single_ended_result"),
+                single_result=_ml_single_for_cause,
                 two_result=st.session_state.get("two_ended_result"),
                 two_quality=st.session_state.get("two_ended_quality"),
                 predicted_cause=_ml_estimated_cause,
@@ -3261,9 +3534,14 @@ with summary_container:
     remote_metadata_summary = st.session_state.get("remote_metadata", {})
     remote_name = str(remote_metadata_summary.get("station_name") or "Remote End")
 
+    local_relay_note = _summary_sidebar_relay_note("local")
+    remote_relay_note = _summary_sidebar_relay_note("remote")
+
     col_sum1, col_sum2, col_sum3, col_sum4 = st.columns(4)
-    col_sum1.metric("Local Record", local_name)
-    col_sum2.metric("Remote Record", remote_name if remote_loaded else remote_status)
+    with col_sum1:
+        _render_summary_record_metric("Local Record", local_name, local_relay_note)
+    with col_sum2:
+        _render_summary_record_metric("Remote Record", remote_name if remote_loaded else remote_status, remote_relay_note)
     col_sum3.metric("Samples", metadata.get("total_samples", "-"))
     col_sum4.metric("Frequency", f"{metadata.get('frequency') or '-'} Hz")
 
@@ -3386,10 +3664,21 @@ with summary_container:
                 st.session_state["summary_waveform_signatures"] = {}
             st.session_state["_wf_sig_key"] = _wf_key
 
+    _summary_single_for_cause = (
+        st.session_state.get("single_ended_result")
+        or st.session_state.get("two_ended_local_single_result")
+    )
+
     # Baris 1 — Fault Type dan Prediksi Penyebab (ringkas)
     _estimated_cause, _ = estimate_summary_disturbance_cause(
         fault_type_summary,
         st.session_state.get("high_resistance_result"),
+        phasors=st.session_state.get("phasors"),
+        prefault_phasors=st.session_state.get("prefault_phasors"),
+        single_result=_summary_single_for_cause,
+        two_result=st.session_state.get("two_ended_result"),
+        two_quality=st.session_state.get("two_ended_quality"),
+        line_param=st.session_state.get("effective_line_param") or st.session_state.get("line_param"),
         fault_hour=_summary_fault_hour,
         fault_month=_summary_fault_month,
         weather_context=st.session_state.get("summary_weather_context"),
@@ -3587,7 +3876,7 @@ with summary_container:
         st.session_state.get("high_resistance_result"),
         phasors=st.session_state.get("phasors"),
         prefault_phasors=st.session_state.get("prefault_phasors"),
-        single_result=st.session_state.get("single_ended_result"),
+        single_result=_summary_single_for_cause,
         two_result=st.session_state.get("two_ended_result"),
         two_quality=st.session_state.get("two_ended_quality"),
         line_param=st.session_state.get("effective_line_param") or st.session_state.get("line_param"),
@@ -4661,7 +4950,8 @@ def render_simple_rx_locus(end_side: str):
         {},
     )
     secondary_scale = impedance_secondary_scale_from_transformer(transformer_data)
-    loop_options = ["AG", "BG", "CG", "AB", "BC", "CA"]
+    loop_options = RX_LOCUS_LOOP_OPTIONS
+    _sync_rx_locus_loop_to_default(end_side, ctx["default_loop"])
 
     st.markdown(f"### R-X Locus Trajectory - {label}")
     col1, col2, col3, col4 = st.columns(4)

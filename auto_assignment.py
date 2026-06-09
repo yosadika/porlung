@@ -328,8 +328,21 @@ def get_auto_transformer_data(metadata: dict):
     User tetap bisa koreksi manual.
     """
 
-    vt_ratio = metadata.get("vt_ratio_from_cfg")
-    ct_ratio = metadata.get("ct_ratio_from_cfg")
+    def usable_cfg_ratio(value):
+        if value is None:
+            return None, "DEFAULT"
+        try:
+            ratio = float(value)
+        except (TypeError, ValueError):
+            return None, "DEFAULT"
+        if ratio <= 0:
+            return None, "DEFAULT"
+        if abs(ratio - 1.0) < 1e-9:
+            return None, "CFG_1_TO_1_NO_RATIO"
+        return ratio, "CFG"
+
+    vt_ratio, vt_source = usable_cfg_ratio(metadata.get("vt_ratio_from_cfg"))
+    ct_ratio, ct_source = usable_cfg_ratio(metadata.get("ct_ratio_from_cfg"))
 
     vt_primary = float(vt_ratio) if vt_ratio else 150000.0
     vt_secondary = 1.0 if vt_ratio else 100.0
@@ -342,8 +355,8 @@ def get_auto_transformer_data(metadata: dict):
         "ct_secondary": ct_secondary,
         "vt_primary": vt_primary,
         "vt_secondary": vt_secondary,
-        "ct_ratio_source": "CFG" if ct_ratio else "DEFAULT",
-        "vt_ratio_source": "CFG" if vt_ratio else "DEFAULT",
+        "ct_ratio_source": ct_source,
+        "vt_ratio_source": vt_source,
     }
 
 

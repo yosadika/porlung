@@ -1078,8 +1078,24 @@ def render():
                 "two_ended_remote_fault_type_result",
                 {},
             )
+            current_local_fault_type = (st.session_state.get("fault_type_result") or {}).get("fault_type")
+            current_remote_fault_type = (st.session_state.get("remote_fault_type_result") or {}).get("fault_type")
+            stale_fault_type_compare = (
+                current_local_fault_type
+                and local_fault_type_result.get("fault_type")
+                and local_fault_type_result.get("fault_type") != current_local_fault_type
+            ) or (
+                current_remote_fault_type
+                and remote_fault_type_result.get("fault_type")
+                and remote_fault_type_result.get("fault_type") != current_remote_fault_type
+            )
 
             st.markdown("### Single-Ended Comparison")
+            if stale_fault_type_compare:
+                st.warning(
+                    "Fault type saat ini berbeda dari data pembanding SE yang tersimpan. "
+                    "Klik Calculate Double-Ended ulang agar pembanding SE memakai hasil deteksi terbaru."
+                )
 
             L = line_param["length_km"]
             remote_single_position = build_remote_single_signed_position(

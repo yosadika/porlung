@@ -138,7 +138,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
   - `invert_current`: kalikan Ia/Ib/Ic/IE dengan −1 setelah rasio CT. Digunakan bila CT terpasang terbalik (gejala: lokasi SE/DE negatif atau >100%).
   - Implementasi: `apply_signal_assignment(..., invert_voltage, invert_current)` di `signal_assignment.py`.
 - Transformer data disimpan untuk local dan remote: `ct_primary`, `ct_secondary`, `vt_primary`, `vt_secondary`, `invert_voltage`, `invert_current`, nominal phase voltage RMS, nominal current RMS.
-- CT/VT ratio **tidak lagi** dibaca dari spreadsheet `line_impedance` — diinput langsung di Signal Assignment.
+- CT/VT ratio **tidak** dibaca dari spreadsheet `line_impedance`. Default berasal dari CFG bila ratio valid; jika CFG menyimpan `1/1` (dibaca sebagai ratio `1`, artinya tidak ada ratio aktual), Signal Assignment otomatis memakai `VT Ratio primary/secondary` dan `CT Ratio Primary/Secondary` dari sheet `line_data` yang cocok dengan filter sidebar GI/Bay/Line end tersebut. User tetap bisa koreksi manual di form Signal Assignment.
 - Validasi duplikasi channel wajib: `Va/Vb/Vc/Ia/Ib/Ic` tidak boleh memakai channel yang sama lebih dari satu kali.
 
 ---
@@ -171,8 +171,10 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Input: magnitude `Va/Vb/Vc/Ia/Ib/Ic/IE/I0`, optional prefault phasor, threshold current rise/voltage drop/ground current/delta current/delta voltage.
 - Fasa terganggu dari gabungan: arus tinggi relatif terhadap minimum, tegangan drop relatif terhadap maksimum, delta current/voltage dari prefault.
 - Ground involvement dari: rasio `IE` terhadap arus maksimum, rasio `I0` terhadap arus rata-rata, kenaikan `IE/I0` dari prefault.
+- Anti over-detect phasa-phasa: bila dua arus fasa dominan seimbang, fasa ketiga sangat kecil, dan IE/I0 kecil, hasil diprioritaskan sebagai gangguan phasa-phasa murni (`AB`, `BC`, atau `CA`) walaupun sag/delta tegangan sempat memasukkan fasa ketiga.
 - Klasifikasi: `AG/BG/CG`, `AB/BC/CA`, `ABG/BCG/CAG`, `ABC`, `ABCG`, `UNKNOWN`, `A?/B?/C?`.
 - Confidence 0–10 dari kejelasan fault type, ground ratio, balance current/voltage, jumlah fasa terganggu.
+- Local End dan Remote End menampilkan grafik perbandingan fasor RMS yang sama: tegangan RMS per fasa dan arus RMS per fasa + Ground IE.
 
 ---
 
@@ -182,6 +184,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - `line_param` berisi minimal: `line_name`, `length_km`, `Z1_per_km`, `Z0_per_km`, `Z1_total`, `Z0_total`, `K0`.
 - Konversi panjang via `convert_length_to_km` (meter/kilometer/mile).
 - Impedansi dapat dibangun dari: R/X, magnitude/angle, X dan phi, primary/secondary dengan konversi CT/VT.
+- Jika sumber `Database Spreadsheet Line Data` dipilih, form `Nama segment` muncul tepat sebelum selector sumber panjang line. Input ini dipakai sebagai nama segment/line sesi berjalan; tombol `Update Nama Segment` menulis ulang cell `SEGMENT` pada baris spreadsheet yang sedang dipilih. Update membutuhkan service account Google Sheets dengan akses Editor.
 - Jika sumber `Database Spreadsheet Cable Data` dipilih, user dapat mengaktifkan komposisi beberapa jenis konduktor per section. Aplikasi menghitung `Z1_per_km` dan `Z0_per_km` ekuivalen sebagai rata-rata berbobot panjang section: `sum(Z_i * panjang_i) / sum(panjang_i)`. Ini dipakai untuk meningkatkan akurasi SE/DE pada jalur transmisi dengan kombinasi tipe konduktor.
 - Nama GI local dan remote diinfer dari `line_name`; jika tidak sesuai, user harus memperbaiki line parameter.
 - **Sumber panjang line untuk kalkulasi:** selector global ada di tab Line (sebelum Normalize). Pilihan: `line_parameter` atau `tower_schedule`. Hasil disimpan ke `st.session_state["effective_line_param"]`.
@@ -295,9 +298,9 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 ### Guardrail R-X Locus dan Literatur
 
 - **Pemisahan sumber sheet:** `database_line_sheet` / `line_data_sheet_name` dipakai oleh tab Line Parameter dan boleh menunjuk `line_impedance`. R-X Locus memakai key terpisah `rx_locus_line_data_sheet` / `rx_locus_line_data_sheet_name` dengan default `line_data`. Jangan mengembalikan R-X Locus agar membaca `line_data_sheet_name`, karena itu membuat Line Parameter dan zona relay saling tarik-menarik.
-- **Struktur `line_data` aktif:** `No`, `UPT`, `Tegangan`, `ULTG`, `GI`, `Nama Line`, `Nomor Line`, `SEGMENT`, `Panjang (km)`, `Jenis Konduktor`, `Jumlah Sirkit`, `MERK`, `VT Ratio primary`, `VT Ratio Secondary`, `CT Ratio Primary`, `CT Ratio Secondary`, `Z1/Z2/Z3 Sec`, `R*P/R*G Sec`, `Line Impedance`, `VTR/CTR`, `Z1/Z2/Z3 Prim`, `R*P/R*G Prim`, `Z Line Prim`, `R Load Prim`, `Real/ABS`.
+- **Struktur `line_data` aktif:** `No`, `UPT`, `Tegangan`, `ULTG`, `GI`, `Nama Line`, `Nomor Line`, `SEGMENT`, `Panjang (km)`, `Jenis Konduktor`, `Jumlah Sirkit`, `MERK`, `Type`, `VT Ratio primary`, `VT Ratio Secondary`, `CT Ratio Primary`, `CT Ratio Secondary`, `Z1/Z2/Z3 Sec`, `R*P/R*G Sec`, `Line Impedance`, `VTR/CTR`, `Z1/Z2/Z3 Prim`, `R*P/R*G Prim`, `Z Line Prim`, `R Load Prim`, `Real/ABS`.
 - **Restore/filter:** sidebar Local/Remote End adalah sumber kebenaran saat filter aktif. `GI` di sidebar harus memilih `GI/Substation` R-X, `Bay` di sidebar harus memilih `Nama Line`/Bay R-X, dan `Line` di sidebar harus memilih baris relay melalui `Nomor Line`. Format lama `Nama Line dan Nomor Line` tetap fallback, tetapi bukan struktur utama.
-- **Base setting:** sumber `line_data` harus memilih kolom `Prim` saat base `primary` dan kolom `Sec` saat base `secondary`; source `distance_settings` tetap fallback karena satuannya tidak selalu eksplisit.
+- **Base setting:** sumber `line_data` harus memilih kolom `Prim` saat base `primary` dan kolom `Sec` saat base `secondary`; source `distance_settings` tetap fallback karena satuannya tidak selalu eksplisit. Kolom rasio CT/VT di `line_data` hanya dipakai untuk fallback Signal Assignment ketika CFG `1/1`, bukan untuk mengganti rasio CFG yang valid.
 - **Trajectory:** apparent loop impedance dihitung dari fasor sliding DFT (`calculate_locus_loop_impedance`), bukan dari fault inception mentah. Fault inception untuk sinkronisasi/trigger, DFT cursor untuk titik phasor/locus.
 - **Zona:** overlay adalah visualisasi engineering quadrilateral/polygonal berbasis `X reach` dan `R reach`. Untuk loop ground pakai `R*G`, untuk phase loop pakai `R*P`. Jangan klaim sebagai replica penuh relay vendor sampai ada model tilt reactance, directional supervision, left/right blinder detail, load encroachment, memory/polarizing quantity, dan logic pabrikan.
 - **Catatan literatur:** setelah gambar locus harus ada expander `Catatan literatur R-X Locus dan zona distance` yang menjelaskan kesesuaian dengan R-X diagram/apparent impedance serta keterbatasan model overlay. Referensi lokal diambil dari `literature/distance_zone/*.pages.md`.
@@ -341,15 +344,17 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Tampil setelah COMTRADE lokal berhasil dibaca.
 - Jika kalkulasi belum lengkap, tampilkan `Pending`, bukan halaman blank.
 - Konten: metadata local/remote, status Signal Assignment/Fault Cursor/Phasor/Fault Type/Line Parameter/SE/DE, Key Results, Status Diagnostik DE, IE source local/remote, perbandingan prefault/fault, waveform fokus opsional, estimasi penyebab gangguan, grafik SE/DE, Tower Map Fault Location, cuaca terkini + forecast, R-X Locus local/remote, warning kualitas DE/HR.
+- Metadata local/remote menampilkan catatan kaki relay `MERK / Type` dari sheet `line_data`, mengikuti GI/Bay/Line yang dipilih pada filter sidebar masing-masing end.
 - **Key Results** disusun 2 baris: (1) Fault Type GI lokal + Fault Type GI remote (mengakomodir fasa terganggu berbeda antar ujung) + Prediksi Penyebab (ringkas); (2) SE dari GI lokal, SE dari GI remote (jarak asli dari masing-masing GI), DE dari GI lokal, DE dari GI remote — semua dengan persen. DE Quality dan Status DE tidak lagi di Key Results (ada di Status Diagnostik DE).
 - **Estimasi Penyebab Gangguan otomatis** (tanpa selectbox manual): `estimate_summary_disturbance_cause` memakai **candidate-scoring multi-fitur berbasis literatur**:
   - **Komponen simetris** — rasio I2/I1, I0/I1, I0/I2 (tanda sekuens per tipe, SEL), plus sudut sekuens (∠I2−∠I1, ∠I0−∠I1), rasio tegangan (V2/V1, V0/V1), dan impedansi sekuens (Z0/Z1/Z2).
+  - **Evidence PANEN RISOL** — rule heuristik terinspirasi workbook PANEN RISOL memakai karakter `R/X`, `X/R`, rasio `3I0`, rasio `3V0`, dan beda sudut loop untuk menambah bukti kandidat Petir, Vegetasi/Pohon, Satwa/Hewan, atau Benda Asing/Flying Object. Ini bukti pendukung, **bukan penyebab final otomatis**.
   - **Resistansi gangguan (Rf)** — rendah → flashover/petir/satwa; tinggi → vegetasi.
   - **Waktu kejadian** — hour-of-day (fitur diskriminatif #1 per Minnaar 2014; puncak diurnal bird streamer ~06:00 & ~22:00) dan bulan/musim (kemarau Indonesia → kebakaran lahan).
   - **Cuaca lokasi** (OpenWeather) — badai petir → petir; hujan/kabut/RH tinggi → polusi; cerah-kering → kebakaran. *Caveat: cuaca SAAT INI, bukan saat kejadian* (lag 1 rerun; valid untuk gangguan baru).
   - **Tanda waveform** (`waveform_signatures.py` dari raw COMTRADE) — transien/HF tajam (`di_dt_norm`, `hf_ratio`) → petir; durasi + clear/reclose → temporer (petir/satwa) vs permanen (vegetasi/isolator).
-  - Kandidat: Sambaran Petir, Vegetasi/Pohon, Satwa Liar (Bird Streamer), Flashover Polusi/Isolator, Kebakaran di Bawah Saluran; 3-fasa simetris → Power Swing.
-  - Output: tabel **fakta terukur** + tabel **kandidat ter-ranking** (skor + bukti) — keduanya dalam **expander** (tertutup default), tabel HTML print-friendly (`build_cause_table_html`); plus penjelasan, catatan validasi, referensi. Ambang `decisive` (skor top ≥3 & selisih ≥1) → label tegas; jika tidak → "Indikasi Awal (perlu validasi lapangan)". Konteks **Indonesia/tropis**. Referensi penyebab di `literature/fault_type/` (`.md`).
+  - Kandidat: Sambaran Petir, Vegetasi/Pohon, Satwa Liar (Bird Streamer), Flashover Polusi/Isolator, Kebakaran di Bawah Saluran, Benda Asing/Flying Object; 3-fasa simetris → Power Swing.
+  - Output: tabel **fakta terukur** + tabel **kandidat ter-ranking** (skor + bukti) — keduanya dalam **expander** (tertutup default), tabel HTML print-friendly (`build_cause_table_html`); plus penjelasan, catatan validasi, referensi. Ambang `decisive` (skor top ≥3 & selisih ≥1) → label tegas; jika tidak → label eksplisit `Belum pasti: <kandidat terkuat>` agar user memahami kandidat yang bersaing tanpa menganggapnya final. Konteks **Indonesia/tropis**. Referensi penyebab di `literature/fault_type/` (`.md`).
 - **Dataset Penyebab (jembatan rule → ML)**: dipindahkan ke tab `Machine Learning > Dataset Penyebab`. Panel merekam **feature-vector** kasus (48 kolom, kolom A = `case_id = sha1(line_name|fault_time_cfg)`: metadata filter UPT/ULTG/segment, komponen simetris, Rf, jam/bulan, cuaca, tanda waveform, jarak SE/DE, prediksi rule) + **penyebab terkonfirmasi** (label user pasca-inspeksi) ke sheet `fault_cause` pada Database Spreadsheet (upsert by `case_id`; Sheets API + service account), fallback unduh CSV.
 - Grafik SE/DE: memakai hasil paling update dari session; scoring SE via status `VALID/CHECK/UNCERTAIN` + warning count; scoring DE via `quality_score`; line length mengikuti `effective_line_param`. Label draggable + both-GI + marker filled (lihat Double-End).
 - Tower Map Summary: default DE jika tersedia, fallback SE; fokus ke dua tower pengapit; Map Settings default tertutup; tabel -5/+5 tower default terbuka saat focus fault.

@@ -70,7 +70,7 @@ Struktur `line_impedance` aktif:
 | `RATIO GI B CT` | `GI B CT`, `GIB CT`, `CT GI B` | `primary/secondary` | CT ratio sisi remote |
 | `RATIO GI B VT` | `GI B VT`, `GIB VT`, `VT GI B` | `primary/secondary` | VT ratio sisi remote |
 
-> **Dihapus sejak v1.0.30:** Kolom `RATIO GI A CT/VT`, `RATIO GI B CT/VT`, `GI A`, `GI B` tidak lagi dibaca dari spreadsheet. CT/VT ratio diinput langsung di **Signal Assignment** (Local/Remote End); nama GI diturunkan dari nama saluran via `infer_gi_names_from_line_name()`. Kolom boleh tetap ada di spreadsheet tanpa efek.
+> **Dihapus sejak v1.0.30:** Kolom `RATIO GI A CT/VT`, `RATIO GI B CT/VT`, `GI A`, `GI B` tidak lagi dibaca dari sheet `line_impedance`. CT/VT ratio utama berasal dari CFG atau input **Signal Assignment** (Local/Remote End). Fallback spreadsheet hanya memakai kolom rasio pada sheet `line_data` jika CFG berisi `1/1`.
 
 #### Session State yang Diisi
 
@@ -81,6 +81,8 @@ Struktur `line_impedance` aktif:
 | `excel_impedance_source` | String sumber data (`"Database Spreadsheet Line Data"` dst.) |
 
 > Auto-pick di tab Line Parameter memakai filter sidebar Local End (`sidebar_filter_gi_local`, `sidebar_filter_bay_local`, `sidebar_filter_line_local`) untuk mencocokkan kolom `GI`, `BAY`, dan `LINE` pada `line_impedance`. `sidebar_filter_segment` berasal dari `tower_schedule` dan tidak lagi dipakai sebagai kunci pemilihan otomatis baris impedansi.
+
+Pada sumber `Database Spreadsheet Line Data`, form `Nama segment` di tab Line Parameter dapat mengisi nama segment/line sesi berjalan dan tombol `Update Nama Segment` menulis ulang cell kolom `SEGMENT` pada baris `line_impedance` yang dipilih. Operasi update membutuhkan Google service account dengan akses Editor dan hanya mengubah cell `SEGMENT`, bukan seluruh baris.
 
 Untuk sumber `Database Spreadsheet Cable Data`, user dapat memilih beberapa baris konduktor dan panjang section masing-masing. Aplikasi menghitung impedansi ekuivalen berbobot panjang (`sum(Z_i * panjang_i) / sum(panjang_i)`) lalu menyimpan detail section di `excel_impedance_data["mixed_conductor_sections"]`.
 
@@ -96,6 +98,7 @@ Jika sheet `line_data` menyediakan setting relay distance dalam satuan eksplisit
 | `Nama Line` | `Bay`, `Nama Bay` | Filter Bay/nama line relay |
 | `Nomor Line` | `No Line`, `Line`, `Nama Line dan Nomor Line` | Nomor line untuk auto-select setting; `Nama Line dan Nomor Line` hanya fallback format lama |
 | `MERK` | — | Label setting |
+| `Type` | — | Tipe relay |
 | `Z1 Sec (Ω)`, `Z2 Sec (Ω)`, `Z3 Sec (Ω)` | secondary | X reach Zone 1/2/3 relay secondary |
 | `R1P Sec (Ω)`, `R2P Sec (Ω)`, `R3P Sec (Ω)` | secondary | Resistive reach phase fault Zone 1/2/3 |
 | `R1G Sec (Ω)`, `R2G Sec (Ω)`, `R3G Sec (Ω)` | secondary | Resistive reach ground fault Zone 1/2/3 |
@@ -110,12 +113,14 @@ Jika sheet `line_data` menyediakan setting relay distance dalam satuan eksplisit
 
 Struktur `line_data` aktif:
 
-`No`, `UPT`, `Tegangan`, `ULTG`, `GI`, `Nama Line`, `Nomor Line`, `SEGMENT`, `Panjang (km)`, `Jenis Konduktor`, `Jumlah Sirkit`, `MERK`, `VT Ratio primary`, `VT Ratio Secondary`, `CT Ratio Primary`, `CT Ratio Secondary`, `Z1 Sec (ohm)`, `tZ1 (s)`, `R1P Sec (ohm)`, `R1G Sec (ohm)`, `Z2 Sec (ohm)`, `tZ2 (s)`, `R2P Sec (ohm)`, `R2G Sec (ohm)`, `Z3 Sec (ohm)`, `tZ3 (s)`, `R3P Sec (ohm)`, `R3G Sec (ohm)`, `Line Impedance (ohm/km)`, `VTR/CTR`, `Z1 Prim (ohm)`, `tZ1 (s)`, `R1P Prim (ohm)`, `R1G Prim (ohm)`, `Z2 Prim (ohm)`, `tZ2 (s)`, `R2P Prim (ohm)`, `R2G Prim (ohm)`, `Z3 Prim (ohm)`, `tZ3 (s)`, `R3P Prim (ohm)`, `R3G Prim (ohm)`, `Z Line Prim (ohm)`, `R Load Prim (ohm)`, `Real/ABS`.
+`No`, `UPT`, `Tegangan`, `ULTG`, `GI`, `Nama Line`, `Nomor Line`, `SEGMENT`, `Panjang (km)`, `Jenis Konduktor`, `Jumlah Sirkit`, `MERK`, `Type`, `VT Ratio primary`, `VT Ratio Secondary`, `CT Ratio Primary`, `CT Ratio Secondary`, `Z1 Sec (ohm)`, `tZ1 (s)`, `R1P Sec (ohm)`, `R1G Sec (ohm)`, `Z2 Sec (ohm)`, `tZ2 (s)`, `R2P Sec (ohm)`, `R2G Sec (ohm)`, `Z3 Sec (ohm)`, `tZ3 (s)`, `R3P Sec (ohm)`, `R3G Sec (ohm)`, `Line Impedance (ohm/km)`, `VTR/CTR`, `Z1 Prim (ohm)`, `tZ1 (s)`, `R1P Prim (ohm)`, `R1G Prim (ohm)`, `Z2 Prim (ohm)`, `tZ2 (s)`, `R2P Prim (ohm)`, `R2G Prim (ohm)`, `Z3 Prim (ohm)`, `tZ3 (s)`, `R3P Prim (ohm)`, `R3G Prim (ohm)`, `Z Line Prim (ohm)`, `R Load Prim (ohm)`, `Real/ABS`.
 
 - `Nama Line` adalah opsi Bay/nama line pada UI R-X Locus. Alias lama `Bay` dan `Nama Bay` tetap diterima.
 - `Nomor Line` adalah nomor line untuk auto-select baris relay. Alias lama `No Line`, `Line`, dan `Nama Line dan Nomor Line` tetap fallback.
+- `VT Ratio primary`, `VT Ratio Secondary`, `CT Ratio Primary`, dan `CT Ratio Secondary` dipakai untuk mengisi default Signal Assignment bila rasio CT/VT dari CFG adalah `1/1`; rasio CFG valid tetap prioritas.
 - Kolom `Prim` dipakai saat `rx_locus_zone_setting_base_* = "primary"`.
 - Kolom `Sec` dipakai saat `rx_locus_zone_setting_base_* = "secondary"`, lalu dikonversi ke primary ohm memakai CT/VT dari Signal Assignment aktif, bukan memakai rasio pada spreadsheet.
+- Kolom `MERK` dan `Type` dipakai sebagai catatan kaki relay Local/Remote pada Summary berdasarkan filter sidebar GI/Bay/Line.
 - Kolom waktu `tZ*`, `Z Line Prim`, `R Load Prim`, `Line Impedance`, `VTR/CTR`, `Real/ABS`, `UPT`, `Tegangan`, `ULTG`, `SEGMENT`, `Panjang`, `Jenis Konduktor`, dan `Jumlah Sirkit` adalah metadata/audit untuk saat ini; belum menentukan polygon overlay.
 - Sheet khusus zona R-X adalah `rx_locus_line_data_sheet_name` / credentials `rx_locus_line_data_sheet` dengan default `line_data`. Jangan disamakan dengan `line_data_sheet_name` / `database_line_sheet` yang dipakai Line Parameter.
 - Overlay zona R-X adalah visualisasi engineering quadrilateral/polygonal berbasis `R reach` dan `X reach`; bukan replica penuh relay vendor sampai tilt reactance, directional supervision, left/right blinder detail, load encroachment, memory/polarizing quantity, dan logic pabrikan dimodelkan.
@@ -364,6 +369,8 @@ Dirakit oleh `fault_cause_dataset.build_fault_cause_feature_row()` (48 kolom, `D
 | Lokasi | `se_distance_km`, `de_distance_km`, `de_quality` |
 | Prediksi rule | `predicted_cause`, `predicted_score` |
 | **Target (label)** | `confirmed_cause` (diisi user dari `CONFIRMED_CAUSE_LABELS` setelah inspeksi) |
+
+Catatan prediksi rule: `predicted_cause`/`predicted_score` berasal dari `summary_helpers.estimate_summary_disturbance_cause()`. Skor kandidat dapat dipengaruhi **Evidence PANEN RISOL** (`R/X`, `X/R`, rasio `3I0/loop`, rasio `3V0/loop`, beda sudut loop) selain fitur komponen simetris, Rf/HR, waktu, cuaca, waveform, dan hasil SE/DE. Tidak ada kolom baru untuk PANEN RISOL; kontribusinya tercermin di `predicted_cause`, `predicted_score`, dan bukti kandidat pada Summary.
 
 ---
 

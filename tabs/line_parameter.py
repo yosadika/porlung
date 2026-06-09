@@ -15,6 +15,34 @@ from line_parameter import (
     build_line_parameter_dataframe,
     normalize_line_parameter,
 )
+from fault_cause_dataset import _build_sheets_service, _col_letter, _extract_spreadsheet_id
+
+
+INTERNAL_SHEET_ROW_COL = "__sheet_row_number"
+
+
+def _update_line_data_segment_cell(spreadsheet_url: str, sheet_name: str, sheet_row: int, segment_col_index: int, segment_name: str):
+    sid = _extract_spreadsheet_id(spreadsheet_url)
+    if not sid:
+        return False, "URL Database Spreadsheet tidak valid."
+    if sheet_row < 2 or segment_col_index < 1:
+        return False, "Baris atau kolom SEGMENT yang dipilih tidak valid."
+    segment_name = str(segment_name or "").strip()
+    if not segment_name:
+        return False, "Nama segment baru masih kosong."
+    try:
+        ss = _build_sheets_service().spreadsheets()
+        col_letter = _col_letter(segment_col_index)
+        ss.values().update(
+            spreadsheetId=sid,
+            range=f"{sheet_name}!{col_letter}{sheet_row}",
+            valueInputOption="RAW",
+            body={"values": [[segment_name]]},
+        ).execute()
+        read_google_spreadsheet_table_cached.clear()
+        return True, f"SEGMENT baris {sheet_row} diperbarui menjadi '{segment_name}'."
+    except Exception as exc:
+        return False, f"Gagal update SEGMENT di Google Sheet: {exc}"
 
 
 @st.fragment
@@ -56,6 +84,7 @@ def render():
     )
 
     excel_impedance_data = None
+    line_data_segment_update_context = {}
     local_transformer_for_line = (
         st.session_state.get("local_transformer_data")
         or st.session_state.get("auto_transformer_data", {})
@@ -212,6 +241,10 @@ def render():
                 corrected_columns["bay_pht"] = None
                 corrected_columns["length"] = None
 
+            if INTERNAL_SHEET_ROW_COL not in conductor_df.columns:
+                conductor_df = conductor_df.copy()
+                conductor_df[INTERNAL_SHEET_ROW_COL] = list(range(2, len(conductor_df) + 2))
+
             if not use_cable_database:
                 _f_gi_l = st.session_state.get("sidebar_filter_gi_local", "")
                 _f_bay_l = st.session_state.get("sidebar_filter_bay_local", "")
@@ -311,6 +344,26 @@ def render():
 
                 selected_row_index = row_labels.index(selected_row_label)
                 selected_row = conductor_df.iloc[selected_row_index]
+                if not use_cable_database:
+                    segment_col = corrected_columns.get("segment")
+                    if segment_col and segment_col in conductor_df.columns:
+                        try:
+                            segment_col_index = list(conductor_df.columns).index(segment_col) + 1
+                        except ValueError:
+                            segment_col_index = None
+                        sheet_row_number = selected_row.get(INTERNAL_SHEET_ROW_COL)
+                        try:
+                            sheet_row_number = int(sheet_row_number)
+                        except (TypeError, ValueError):
+                            sheet_row_number = None
+                        if segment_col_index and sheet_row_number:
+                            line_data_segment_update_context = {
+                                "spreadsheet_url": database_spreadsheet_url,
+                                "sheet_name": database_sheet_name,
+                                "sheet_row": sheet_row_number,
+                                "segment_col_index": segment_col_index,
+                                "current_segment": selected_row.get(segment_col, ""),
+                            }
 
                 excel_impedance_data = extract_impedance_from_row(
                     selected_row,
@@ -916,6 +969,66 @@ def render():
                 "Parameter Z1 dan Z0 menggunakan input manual."
             )
 
+    if line_parameter_source == SOURCE_LINE_DATABASE:
+        st.markdown("### Nama Segment")
+        current_segment_name = str(
+            line_data_segment_update_context.get("current_segment")
+            or (excel_impedance_data or {}).get("segment")
+            or line_name
+            or ""
+        ).strip()
+        segment_signature = (
+            line_data_segment_update_context.get("sheet_name"),
+            line_data_segment_update_context.get("sheet_row"),
+            current_segment_name,
+        )
+        if st.session_state.get("line_data_segment_name_signature") != segment_signature:
+            st.session_state["line_data_segment_name_input"] = current_segment_name
+            st.session_state["line_data_segment_name_signature"] = segment_signature
+
+        segment_name_input = st.text_input(
+            "Nama segment",
+            key="line_data_segment_name_input",
+            help="Gunakan untuk menyingkat atau merapikan nama segment yang terlalu panjang dari spreadsheet.",
+        ).strip()
+        update_segment_clicked = st.button(
+            "Update Nama Segment",
+            width="stretch",
+            disabled=not bool(line_data_segment_update_context),
+            help="Overwrite kolom SEGMENT pada baris line_data yang sedang dipilih.",
+        )
+
+        if segment_name_input:
+            line_name = segment_name_input
+            if excel_impedance_data:
+                excel_impedance_data = dict(excel_impedance_data)
+                excel_impedance_data["line_name"] = segment_name_input
+                excel_impedance_data["segment"] = segment_name_input
+                st.session_state["excel_impedance_data"] = excel_impedance_data
+
+        if update_segment_clicked:
+            if not segment_name_input:
+                st.warning("Isi nama segment terlebih dahulu sebelum update spreadsheet.")
+            elif not line_data_segment_update_context:
+                st.warning("Kolom SEGMENT atau baris spreadsheet terpilih belum dapat ditentukan.")
+            else:
+                ok, msg = _update_line_data_segment_cell(
+                    line_data_segment_update_context["spreadsheet_url"],
+                    line_data_segment_update_context["sheet_name"],
+                    int(line_data_segment_update_context["sheet_row"]),
+                    int(line_data_segment_update_context["segment_col_index"]),
+                    segment_name_input,
+                )
+                if ok:
+                    st.success(msg)
+                    st.session_state["line_data_segment_name_signature"] = (
+                        line_data_segment_update_context.get("sheet_name"),
+                        line_data_segment_update_context.get("sheet_row"),
+                        segment_name_input,
+                    )
+                else:
+                    st.error(msg)
+
     st.markdown("### Sumber Panjang Line untuk Perhitungan SE / DE")
     st.caption(
         "Pilihan ini berlaku global untuk semua kalkulasi: "
@@ -1013,7 +1126,6 @@ def render():
             st.session_state["effective_line_param"] = _eff
 
             st.success("Parameter saluran berhasil dinormalisasi.")
-            st.rerun(scope="app")
 
         except Exception as e:
             st.error("Normalisasi parameter saluran gagal.")

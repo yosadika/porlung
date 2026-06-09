@@ -1,3 +1,4 @@
+import cmath
 import html as _html
 
 import pandas as pd
@@ -136,6 +137,182 @@ _DISTURBANCE_CAUSE_REFERENCES = (
     "*A Review and Taxonomy on Fault Analysis in Transmission Lines* (Computation 10, 144); "
     "IEEE Std C37.114-2014 Sec. 3.1; Saha et al. (2010) Ch. 2."
 )
+
+
+def _wrap_angle_deg(delta):
+    return ((float(delta) + 180.0) % 360.0) - 180.0
+
+
+def _phasor_complex(phasors, key):
+    value = (phasors or {}).get(key, {}).get("complex")
+    if value is not None:
+        return value
+
+    magnitude = (phasors or {}).get(key, {}).get("magnitude")
+    angle_deg = (phasors or {}).get(key, {}).get("angle_deg")
+    if magnitude is None or angle_deg is None:
+        return None
+
+    try:
+        return float(magnitude) * cmath.exp(1j * cmath.pi * float(angle_deg) / 180.0)
+    except Exception:
+        return None
+
+
+def _safe_ratio(numerator, denominator):
+    try:
+        denominator = float(denominator)
+        if abs(denominator) <= 1e-9:
+            return None
+        return float(numerator) / denominator
+    except Exception:
+        return None
+
+
+def _panen_risol_evidence_hint(fault_type, phasors=None, single_result=None):
+    """Heuristic evidence inspired by PANEN RISOL; never treated as final cause."""
+    zapp = (single_result or {}).get("Zapp")
+    if zapp is None:
+        z_r = (single_result or {}).get("Zapp_R")
+        z_x = (single_result or {}).get("Zapp_X")
+        if z_r is not None and z_x is not None:
+            zapp = complex(float(z_r), float(z_x))
+
+    loop = str((single_result or {}).get("selected_loop") or fault_type or "").upper().replace("G", "")
+    if loop in ["ABC", "ABCG", "3PH", "3P", "V1/I1"]:
+        loop = "ABC"
+    elif loop == "AC":
+        loop = "CA"
+    elif loop not in ["A", "B", "C", "AG", "BG", "CG", "AB", "BC", "CA", "ABC"]:
+        if fault_type:
+            ft = str(fault_type).upper()
+            if "A" in ft and "B" in ft and "C" in ft:
+                loop = "ABC"
+            elif "A" in ft and "B" in ft:
+                loop = "AB"
+            elif "B" in ft and "C" in ft:
+                loop = "BC"
+            elif "A" in ft and "C" in ft:
+                loop = "CA"
+            elif "A" in ft:
+                loop = "A"
+            elif "B" in ft:
+                loop = "B"
+            elif "C" in ft:
+                loop = "C"
+
+    loop_voltage = (single_result or {}).get("loop_voltage")
+    loop_current = (single_result or {}).get("loop_current")
+    if loop_voltage is None or loop_current is None:
+        va, vb, vc = (_phasor_complex(phasors, k) for k in ("Va", "Vb", "Vc"))
+        ia, ib, ic = (_phasor_complex(phasors, k) for k in ("Ia", "Ib", "Ic"))
+        if loop in ["A", "AG"] and va is not None and ia is not None:
+            loop_voltage, loop_current = va, ia
+        elif loop in ["B", "BG"] and vb is not None and ib is not None:
+            loop_voltage, loop_current = vb, ib
+        elif loop in ["C", "CG"] and vc is not None and ic is not None:
+            loop_voltage, loop_current = vc, ic
+        elif loop == "AB" and all(v is not None for v in [va, vb, ia, ib]):
+            loop_voltage, loop_current = va - vb, ia - ib
+        elif loop == "BC" and all(v is not None for v in [vb, vc, ib, ic]):
+            loop_voltage, loop_current = vb - vc, ib - ic
+        elif loop == "CA" and all(v is not None for v in [vc, va, ic, ia]):
+            loop_voltage, loop_current = vc - va, ic - ia
+        elif loop == "ABC":
+            loop_voltage, loop_current = _phasor_complex(phasors, "V1"), _phasor_complex(phasors, "I1")
+
+    if zapp is None and loop_voltage is not None and loop_current is not None and abs(loop_current) > 1e-9:
+        zapp = loop_voltage / loop_current
+
+    if zapp is None:
+        return None
+
+    r = float(zapp.real)
+    x = float(zapp.imag)
+    abs_r = abs(r)
+    abs_x = abs(x)
+    r_x = _safe_ratio(abs_r, abs_x)
+    x_r = _safe_ratio(abs_x, abs_r)
+
+    i0 = _phasor_complex(phasors, "I0")
+    v0 = _phasor_complex(phasors, "V0")
+    ratio_3i0 = _safe_ratio(3.0 * abs(i0), abs(loop_current)) if i0 is not None and loop_current is not None else None
+    ratio_3v0 = _safe_ratio(3.0 * abs(v0), abs(loop_voltage)) if v0 is not None and loop_voltage is not None else None
+
+    angle_delta = None
+    if loop_voltage is not None and loop_current is not None and abs(loop_voltage) > 1e-9 and abs(loop_current) > 1e-9:
+        angle_delta = abs(_wrap_angle_deg(
+            cmath.phase(loop_current) * 180.0 / cmath.pi
+            - cmath.phase(loop_voltage) * 180.0 / cmath.pi
+        ))
+
+    classification = None
+    evidence = []
+    score_bonus = {}
+
+    if abs_r > abs_x and angle_delta is not None and angle_delta <= 30:
+        classification = "Resistif-Pohon"
+        score_bonus["Vegetasi / Pohon"] = 2
+        evidence.append("PANEN RISOL: R dominan dan beda sudut loop <=30° → indikasi kontak resistif/vegetasi")
+    elif abs_r > abs_x and angle_delta is not None and angle_delta > 30:
+        classification = "Tegakan Non-Pohon"
+        score_bonus["Vegetasi / Pohon"] = 1
+        evidence.append("PANEN RISOL: R dominan tetapi beda sudut loop >30° → indikasi tegakan/benda resistif non-pohon")
+    elif abs_x > abs_r:
+        if (
+            x_r is not None and 1.47 <= x_r < 7.02
+            and r_x is not None and 0.14 < r_x < 0.68
+            and ratio_3i0 is not None and 0.88 < ratio_3i0 < 1.23
+            and angle_delta is not None and 55 < angle_delta < 82
+            and ratio_3v0 is not None and 0.212 < ratio_3v0 < 11.67
+        ):
+            classification = "Hewan"
+            score_bonus["Satwa Liar (Bird Streamer)"] = 2
+            evidence.append("PANEN RISOL: X dominan + rasio 3I0/3V0 dan beda sudut berada pada window indikasi hewan")
+        elif (
+            x_r is not None and 1.156 <= x_r < 4.397
+            and r_x is not None and 0.227 < r_x < 0.866
+            and ratio_3i0 is not None and ratio_3i0 > 0.046
+            and angle_delta is not None and angle_delta > 30
+            and ratio_3v0 is not None and 0.09 < ratio_3v0 < 6.816
+        ):
+            classification = "Petir"
+            score_bonus["Sambaran Petir / Flashover"] = 2
+            evidence.append("PANEN RISOL: X dominan + window X/R, 3I0, 3V0, dan sudut mendukung flashover/petir")
+        elif (
+            x_r is not None and x_r >= 1.4
+            and r_x is not None and 0.229 < r_x < 0.6
+            and angle_delta is not None and angle_delta > 30
+            and ratio_3v0 is not None and ratio_3v0 < 0.1395
+            and ratio_3i0 is not None and ratio_3i0 < 0.046
+        ):
+            classification = "Flying Object"
+            score_bonus["Flashover Polusi / Isolator"] = 1
+            evidence.append("PANEN RISOL: X dominan + 3I0/3V0 sangat kecil → indikasi benda asing/flying object, perlu inspeksi")
+        else:
+            classification = "USF"
+            evidence.append("PANEN RISOL: fitur impedansi tidak masuk window objek spesifik → unidentified system fault")
+
+    if not score_bonus:
+        if abs_r > abs_x:
+            score_bonus["Vegetasi / Pohon"] = 1
+            evidence.append("PANEN RISOL: R dominan → bukti lemah karakter resistif/kontak objek")
+        elif abs_x > abs_r:
+            score_bonus["Sambaran Petir / Flashover"] = 1
+            evidence.append("PANEN RISOL: X dominan → bukti lemah karakter reaktif/flashover")
+
+    return {
+        "classification": classification,
+        "R": r,
+        "X": x,
+        "R/X": r_x,
+        "X/R": x_r,
+        "ratio_3I0": ratio_3i0,
+        "ratio_3V0": ratio_3v0,
+        "angle_delta_deg": angle_delta,
+        "score_bonus": score_bonus,
+        "evidence": evidence,
+    }
 
 
 def estimate_summary_disturbance_cause(
@@ -321,6 +498,23 @@ def estimate_summary_disturbance_cause(
         if "hf_ratio" in wf:
             basis.append(_row("Kandungan HF / Transien", f"HF ratio ≈ {wf.get('hf_ratio'):.2f}, di/dt ≈ {wf.get('di_dt_norm', 0):.1f}" + ("  → transien tajam (impulsif)" if wf_transient_sharp else "")))
 
+    panen_risol_hint = _panen_risol_evidence_hint(fault_type, phasors=phasors, single_result=single_result)
+    if panen_risol_hint:
+        _parts = [
+            f"indikasi {panen_risol_hint.get('classification') or 'tidak spesifik'}",
+            f"R={panen_risol_hint['R']:.2f} Ω",
+            f"X={panen_risol_hint['X']:.2f} Ω",
+        ]
+        if panen_risol_hint.get("X/R") is not None:
+            _parts.append(f"X/R={panen_risol_hint['X/R']:.2f}")
+        if panen_risol_hint.get("ratio_3I0") is not None:
+            _parts.append(f"3I0/loop={panen_risol_hint['ratio_3I0']:.2f}")
+        if panen_risol_hint.get("ratio_3V0") is not None:
+            _parts.append(f"3V0/loop={panen_risol_hint['ratio_3V0']:.2f}")
+        if panen_risol_hint.get("angle_delta_deg") is not None:
+            _parts.append(f"beda sudut={panen_risol_hint['angle_delta_deg']:.0f}°")
+        basis.append(_row("Evidence PANEN RISOL", "; ".join(_parts)))
+
     # ── Kasus 3 fasa simetris: power swing / non-eksternal ───────────
     if fault_type in ["ABC", "ABCG", "3PH", "3P"]:
         return (
@@ -363,6 +557,9 @@ def estimate_summary_disturbance_cause(
         sc += 1; ev.append("Gangguan clear dalam rekaman (temporer) — konsisten flashover petir + reclose sukses")
     if wx_thunder:
         sc += 1; ev.append("Cuaca lokasi saat ini: badai petir (caveat: bukan saat kejadian)")
+    if panen_risol_hint and panen_risol_hint.get("score_bonus", {}).get("Sambaran Petir / Flashover"):
+        sc += panen_risol_hint["score_bonus"]["Sambaran Petir / Flashover"]
+        ev.extend(panen_risol_hint.get("evidence", []))
     ev.append("Indonesia: kerapatan sambaran petir sangat tinggi sepanjang tahun")
     _cand("Sambaran Petir / Flashover", sc, ev)
 
@@ -380,6 +577,9 @@ def estimate_summary_disturbance_cause(
         sc -= 1; ev.append("Transien tajam kurang konsisten dengan kontak resistif lambat")
     if low_rf:
         sc -= 2; ev.append("Rf rendah kurang konsisten dengan kontak vegetasi")
+    if panen_risol_hint and panen_risol_hint.get("score_bonus", {}).get("Vegetasi / Pohon"):
+        sc += panen_risol_hint["score_bonus"]["Vegetasi / Pohon"]
+        ev.extend(panen_risol_hint.get("evidence", []))
     _cand("Vegetasi / Pohon", sc, ev)
 
     # Satwa Liar (bird streamer / animal)
@@ -396,6 +596,9 @@ def estimate_summary_disturbance_cause(
         sc += 1; ev.append("Durasi pendek + clear (temporer) — konsisten kontak satwa sesaat")
     if low_rf:
         sc += 1; ev.append("Rf rendah konsisten dengan flashover streamer")
+    if panen_risol_hint and panen_risol_hint.get("score_bonus", {}).get("Satwa Liar (Bird Streamer)"):
+        sc += panen_risol_hint["score_bonus"]["Satwa Liar (Bird Streamer)"]
+        ev.extend(panen_risol_hint.get("evidence", []))
     _cand("Satwa Liar (Bird Streamer)", sc, ev)
 
     # Flashover Polusi / Isolator
@@ -408,6 +611,9 @@ def estimate_summary_disturbance_cause(
         sc += 2; ev.append("Cuaca lokasi basah/lembap (hujan/kabut/RH tinggi) — pemicu flashover polusi (caveat: bukan saat kejadian)")
     if wet_season:
         sc += 1; ev.append("Musim hujan — pembasahan isolator lebih mungkin")
+    if panen_risol_hint and panen_risol_hint.get("score_bonus", {}).get("Flashover Polusi / Isolator"):
+        sc += panen_risol_hint["score_bonus"]["Flashover Polusi / Isolator"]
+        ev.extend(panen_risol_hint.get("evidence", []))
     ev.append("Perlu pembasahan (kabut/embun/hujan ringan); sering berulang pada lokasi yang sama")
     _cand("Flashover Polusi / Isolator", sc, ev)
 
@@ -424,12 +630,28 @@ def estimate_summary_disturbance_cause(
     ev.append("Verifikasi dengan hotspot AFIS/satelit di sekitar titik gangguan")
     _cand("Kebakaran di Bawah Saluran", sc, ev)
 
+    # Benda asing / flying object, terutama untuk indikasi PANEN RISOL dengan 3I0 dan 3V0 sangat kecil.
+    ev = []; sc = 0
+    if n_phases >= 2 and not ground:
+        sc += 1; ev.append("Gangguan fasa-fasa tanpa ground dapat terjadi akibat benda asing melayang/menjembatani fasa")
+    if wf_cleared is True:
+        sc += 1; ev.append("Gangguan temporer/clear dalam rekaman konsisten dengan objek sesaat")
+    if panen_risol_hint and panen_risol_hint.get("classification") == "Flying Object":
+        sc += 2; ev.extend(panen_risol_hint.get("evidence", []))
+    _cand("Benda Asing / Flying Object", sc, ev)
+
     candidates.sort(key=lambda c: -c["score"])
     top = candidates[0]
     runner = candidates[1] if len(candidates) > 1 else None
     # Ambang keyakinan: skor top rendah atau selisih tipis → belum yakin
     decisive = top["score"] >= 3 and (runner is None or top["score"] - runner["score"] >= 1)
-    label = top["label"] if decisive else "Indikasi Awal (perlu validasi lapangan)"
+    strongest_candidates = [
+        c for c in candidates
+        if c["score"] == top["score"] and c["score"] > 0
+    ]
+    strongest_labels = [c["label"] for c in strongest_candidates]
+    strongest_text = " atau ".join(strongest_labels)
+    label = top["label"] if decisive else f"Belum pasti: {strongest_text}"
 
     cand_rows = [
         {"Penyebab": c["label"], "Skor": c["score"], "Bukti": "; ".join(c["evidence"])}
@@ -437,8 +659,9 @@ def estimate_summary_disturbance_cause(
     ] or [{"Penyebab": top["label"], "Skor": top["score"], "Bukti": "; ".join(top["evidence"])}]
 
     explanation = (
-        f"Kandidat terkuat: **{top['label']}** (skor {top['score']}). "
+        f"Kandidat terkuat: **{strongest_text}** (skor {top['score']}). "
         + ("Selisih dengan kandidat berikutnya cukup jelas. " if decisive else
+           f"Penyebab belum dapat dipastikan; kandidat terkuat saat ini adalah **{strongest_text}**. "
            "Selisih antar kandidat tipis — perlakukan sebagai indikasi awal, bukan kesimpulan. ")
         + "Skor disusun dari fault type, komponen simetris (I0/I1/I2 + sudut/impedansi), resistansi gangguan, jam & bulan kejadian, cuaca lokasi, dan tanda waveform (transien/durasi/reclose) sesuai fitur diskriminatif literatur."
     )
