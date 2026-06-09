@@ -145,6 +145,12 @@ from fault_cause_dataset import (
     build_fault_cause_feature_row,
     append_feature_row_to_gsheet,
 )
+from fault_location_dataset import (
+    LOCATION_DATASET_COLUMNS,
+    LOCATION_DATASET_SHEET_NAME,
+    build_fault_location_feature_row,
+    append_fault_location_row_to_gsheet,
+)
 from cloud_cases import (
     SAVED_CASES_SHEET,
     save_case_to_cloud,
@@ -828,12 +834,20 @@ _sidebar_db_url = (
     str(st.session_state.get("database_spreadsheet_url", "") or "").strip()
     or str(get_config_secret("DATABASE_SPREADSHEET_URL", "") or "").strip()
 )
+_sidebar_tower_url = (
+    str(st.session_state.get("tower_schedule_url", "") or "").strip()
+    or str(get_config_secret("TOWER_SCHEDULE_SPREADSHEET_URL", DEFAULT_TOWER_SCHEDULE_URL) or "").strip()
+)
+_sidebar_tower_sheet = st.session_state.get("tower_schedule_sheet_name", DEFAULT_TOWER_SCHEDULE_SHEET)
 _sidebar_line_sheet = st.session_state.get("line_data_sheet_name", "line_impedance")
 _gf_li = pd.DataFrame()
 _gf_ds = pd.DataFrame()
+_gf_tw = pd.DataFrame()
 _c_li_upt = _c_li_ultg = _c_li_seg = None
 _c_ds_upt = _c_ds_ultg = _c_ds_gi = _c_ds_bay = _c_ds_line = None
+_c_tw_upt = _c_tw_ultg = _c_tw_seg = None
 _sidebar_filter_error = ""
+_sidebar_segment_filter_error = ""
 
 def _nv(v):
     """Normalisasi float-integer: '1.0' -> '1', '2.0' -> '2'."""
@@ -906,14 +920,16 @@ def _render_end_filter(end_label, key_suffix, include_segment=False):
 
     selected_upt = _sidebar_select(f"UPT {end_label}", _sf_vals(_gf_ds, _c_ds_upt), upt_key)
     ds_upt_df = _filt(_gf_ds, _c_ds_upt, selected_upt)
-    li_upt_df = _filt(_gf_li, _c_li_upt, selected_upt)
+    tw_upt_df = _filt(_gf_tw, _c_tw_upt, selected_upt)
 
     selected_ultg = _sidebar_select(f"ULTG {end_label}", _sf_vals(ds_upt_df, _c_ds_ultg), ultg_key)
     ds_ultg_df = _filt(ds_upt_df, _c_ds_ultg, selected_ultg)
-    li_ultg_df = _filt(li_upt_df, _c_li_ultg, selected_ultg)
+    tw_ultg_df = _filt(tw_upt_df, _c_tw_ultg, selected_ultg)
 
     if include_segment:
-        _sidebar_select("Segment Lokal", _sf_vals(li_ultg_df, _c_li_seg), "sidebar_filter_segment")
+        if _sidebar_segment_filter_error:
+            st.caption(f"Daftar Segment belum dapat dimuat dari Tower Schedule: {_sidebar_segment_filter_error}")
+        _sidebar_select("Segment Lokal", _sf_vals(tw_ultg_df, _c_tw_seg), "sidebar_filter_segment")
 
     selected_gi = _sidebar_select(f"GI {end_label}", _sf_vals(ds_ultg_df, _c_ds_gi), gi_key)
     ds_gi_df = _filt(ds_ultg_df, _c_ds_gi, selected_gi)
@@ -933,12 +949,6 @@ def _render_end_filter(end_label, key_suffix, include_segment=False):
 
 if _sidebar_db_url:
     try:
-        _gf_li = read_google_spreadsheet_table_cached(_sidebar_db_url, _sidebar_line_sheet)
-        _gf_li = make_streamlit_safe_columns(_gf_li)
-        _c_li_upt = find_column(_gf_li, ["UPT"])
-        _c_li_ultg = find_column(_gf_li, ["ULTG"])
-        _c_li_seg = find_column(_gf_li, ["SEGMENT"])
-
         _ds_sheet = st.session_state.get("distance_settings_sheet_name", "distance_settings")
         _gf_ds = read_google_spreadsheet_table_cached(_sidebar_db_url, _ds_sheet)
         _gf_ds = make_streamlit_safe_columns(_gf_ds)
@@ -949,6 +959,21 @@ if _sidebar_db_url:
         _c_ds_line = find_column(_gf_ds, ["LINE"])
     except Exception as _sidebar_gi_err:
         _sidebar_filter_error = str(_sidebar_gi_err)
+
+if _sidebar_tower_url:
+    try:
+        _gf_tw = read_google_spreadsheet_query_cached(
+            _sidebar_tower_url,
+            _sidebar_tower_sheet,
+            "select F, G, H where F is not null or G is not null or H is not null",
+        )
+        _gf_tw = make_streamlit_safe_columns(_gf_tw)
+        _gf_tw.columns = [str(col).strip() for col in _gf_tw.columns]
+        _c_tw_seg = find_column(_gf_tw, ["SEGMENT"])
+        _c_tw_upt = find_column(_gf_tw, ["UPT"])
+        _c_tw_ultg = find_column(_gf_tw, ["ULTG"])
+    except Exception as _sidebar_tower_err:
+        _sidebar_segment_filter_error = str(_sidebar_tower_err)
 
 _sidebar_filter_section_visible = bool(_sidebar_db_url)
 
@@ -1185,7 +1210,7 @@ st.caption(
     "-> isi Line -> hitung Single-End atau Double-End."
 )
 
-tab_summary, tab0, tab_tower, tab_local, tab_remote, tab7, tab8, tab9, tab10, tab11 = st.tabs(
+tab_summary, tab0, tab_tower, tab_local, tab_remote, tab7, tab8, tab9, tab10, tab11, tab_ml = st.tabs(
     [
         "Summary",
         "Setup DB",
@@ -1197,6 +1222,7 @@ tab_summary, tab0, tab_tower, tab_local, tab_remote, tab7, tab8, tab9, tab10, ta
         "Single-End",
         "Double-End",
         "R-X Locus",
+        "Machine Learning",
     ]
 )
 
@@ -2514,6 +2540,297 @@ with tab0:
                     st.error(_lc_msg)
 
 
+with tab_ml:
+    st.subheader("Machine Learning")
+    st.caption(
+        "Halaman ini mengumpulkan dataset berlabel untuk pengembangan model ML. "
+        "Model tidak menggantikan rumus proteksi; tahap awal adalah diagnosis penyebab "
+        "dan kalibrasi residual jarak DE berdasarkan validasi lapangan."
+    )
+
+    _ml_line = st.session_state.get("effective_line_param") or st.session_state.get("line_param") or {}
+    if not _ml_line:
+        st.info("Jalankan Line Parameter terlebih dahulu agar dataset ML memiliki konteks saluran.")
+    else:
+        _ml_fault_dt = (
+            get_summary_fault_event_time("cfg_trigger_time")
+            or get_summary_fault_event_time("cfg_start_time")
+        )
+        _ml_fault_time = _ml_fault_dt.isoformat(timespec="seconds") if _ml_fault_dt else ""
+        _ml_fault_hour = _ml_fault_dt.hour if _ml_fault_dt is not None else None
+        _ml_fault_month = _ml_fault_dt.month if _ml_fault_dt is not None else None
+        _ml_local_gi, _ml_remote_gi = infer_gi_names_from_line_name(_ml_line.get("line_name", ""))
+        _ml_local_gi = st.session_state.get("two_ended_local_gi_label") or _ml_local_gi or "GI Lokal"
+        _ml_remote_gi = st.session_state.get("two_ended_remote_gi_label") or _ml_remote_gi or "GI Remote"
+
+        _ml_wf_df = st.session_state.get("assigned_df")
+        _ml_wf_fw = st.session_state.get("fault_window")
+        _ml_wf_det = st.session_state.get("fault_detection") or {}
+        _ml_wf_spc = _ml_wf_det.get("samples_per_cycle") or st.session_state.get("local_samples_per_cycle")
+        _ml_wf_freq = float((st.session_state.get("local_metadata") or {}).get("frequency") or 50.0)
+        if _ml_wf_df is not None and _ml_wf_fw is not None and _ml_wf_spc:
+            _ml_wf_key = (int(_ml_wf_fw.get("fault_index", -1)), int(_ml_wf_spc), len(_ml_wf_df))
+            if st.session_state.get("_wf_sig_key") != _ml_wf_key:
+                try:
+                    st.session_state["summary_waveform_signatures"] = compute_waveform_signatures(
+                        _ml_wf_df, _ml_wf_fw, int(_ml_wf_spc), _ml_wf_freq
+                    )
+                except Exception:
+                    st.session_state["summary_waveform_signatures"] = {}
+                st.session_state["_wf_sig_key"] = _ml_wf_key
+
+        _ml_estimated_cause, _ml_cause_detail = estimate_summary_disturbance_cause(
+            st.session_state.get("fault_type_result", {}),
+            st.session_state.get("high_resistance_result"),
+            phasors=st.session_state.get("phasors"),
+            prefault_phasors=st.session_state.get("prefault_phasors"),
+            single_result=st.session_state.get("single_ended_result"),
+            two_result=st.session_state.get("two_ended_result"),
+            two_quality=st.session_state.get("two_ended_quality"),
+            line_param=_ml_line,
+            fault_hour=_ml_fault_hour,
+            fault_month=_ml_fault_month,
+            weather_context=st.session_state.get("summary_weather_context"),
+            waveform_signatures=st.session_state.get("summary_waveform_signatures"),
+        )
+
+        ml_cause_tab, ml_location_tab, ml_model_tab = st.tabs(
+            ["Dataset Penyebab", "Kalibrasi Lokasi", "Model"]
+        )
+
+        with ml_cause_tab:
+            st.markdown("### Dataset Penyebab Gangguan")
+            _ds_sheet_name = st.session_state.get("fault_cause_sheet_name") or "fault_cause"
+            st.caption(
+                f"Rekam feature-vector kasus ini + penyebab terkonfirmasi ke sheet `{_ds_sheet_name}`."
+            )
+            _ds_confirmed = st.selectbox(
+                "Penyebab Terkonfirmasi (hasil inspeksi)",
+                CONFIRMED_CAUSE_LABELS,
+                index=len(CONFIRMED_CAUSE_LABELS) - 1,
+                key="dataset_confirmed_cause",
+            )
+            _ds_row = build_fault_cause_feature_row(
+                timestamp_analyzed=datetime.now().isoformat(timespec="seconds"),
+                fault_time_cfg=_ml_fault_time,
+                line_name=_ml_line.get("line_name", ""),
+                gi_local=_ml_local_gi,
+                gi_remote=_ml_remote_gi,
+                upt=_active(st.session_state.get("sidebar_filter_upt", "")) and st.session_state.get("sidebar_filter_upt", "") or "",
+                ultg=_active(st.session_state.get("sidebar_filter_ultg", "")) and st.session_state.get("sidebar_filter_ultg", "") or "",
+                upt_local=_active(st.session_state.get("sidebar_filter_upt_local", "")) and st.session_state.get("sidebar_filter_upt_local", "") or "",
+                ultg_local=_active(st.session_state.get("sidebar_filter_ultg_local", "")) and st.session_state.get("sidebar_filter_ultg_local", "") or "",
+                upt_remote=_active(st.session_state.get("sidebar_filter_upt_remote", "")) and st.session_state.get("sidebar_filter_upt_remote", "") or "",
+                ultg_remote=_active(st.session_state.get("sidebar_filter_ultg_remote", "")) and st.session_state.get("sidebar_filter_ultg_remote", "") or "",
+                segment=_active(st.session_state.get("sidebar_filter_segment", "")) and st.session_state.get("sidebar_filter_segment", "") or "",
+                fault_type_result=st.session_state.get("fault_type_result", {}),
+                high_resistance_result=st.session_state.get("high_resistance_result"),
+                phasors=st.session_state.get("phasors"),
+                fault_hour=_ml_fault_hour,
+                fault_month=_ml_fault_month,
+                weather_context=st.session_state.get("summary_weather_context"),
+                waveform_signatures=st.session_state.get("summary_waveform_signatures"),
+                single_result=st.session_state.get("single_ended_result"),
+                two_result=st.session_state.get("two_ended_result"),
+                two_quality=st.session_state.get("two_ended_quality"),
+                predicted_cause=_ml_estimated_cause,
+                predicted_score=(_ml_cause_detail.get("candidates") or [{}])[0].get("Skor"),
+                confirmed_cause=_ds_confirmed,
+            )
+            st.metric("Prediksi Rule Saat Ini", _ml_estimated_cause)
+            with st.expander("Lihat feature-vector penyebab", expanded=False):
+                st.dataframe(
+                    pd.DataFrame([{"Fitur": k, "Nilai": v} for k, v in _ds_row.items()]),
+                    hide_index=True,
+                    width="stretch",
+                )
+            _ds_col1, _ds_col2 = st.columns(2)
+            with _ds_col1:
+                if st.button("Tambah ke Sheet Penyebab", key="dataset_append_btn", width="stretch"):
+                    _ds_url = st.session_state.get("database_spreadsheet_url", "")
+                    if not _ds_url:
+                        st.error("Database Spreadsheet URL belum diisi di Setup DB.")
+                    else:
+                        _ok, _msg = append_feature_row_to_gsheet(_ds_url, _ds_row, sheet_name=_ds_sheet_name)
+                        (st.success if _ok else st.error)(_msg)
+            with _ds_col2:
+                _ds_csv = ",".join(DATASET_COLUMNS) + "\n" + ",".join(
+                    '"' + str(_ds_row.get(c, "")).replace('"', '""') + '"' for c in DATASET_COLUMNS
+                )
+                st.download_button(
+                    "Unduh Baris Penyebab (CSV)",
+                    data=_ds_csv,
+                    file_name=f"fault_cause_row_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    width="stretch",
+                    key="dataset_csv_btn",
+                )
+
+        with ml_location_tab:
+            st.markdown("### Dataset Kalibrasi Lokasi Gangguan")
+            _loc_sheet_name = st.session_state.get("fault_location_sheet_name") or LOCATION_DATASET_SHEET_NAME
+            st.caption(
+                f"Rekam hasil SE/DE dan lokasi aktual lapangan ke sheet `{_loc_sheet_name}`. "
+                "Target awal ML adalah koreksi residual: actual_distance_km - de_raw_km."
+            )
+            _two_result = st.session_state.get("two_ended_result") or {}
+            _de_default = float(
+                _two_result.get("distance_from_original_local_km", _two_result.get("distance_km", 0.0)) or 0.0
+            )
+            _line_length = float(_ml_line.get("length_km") or 0.0)
+            _tower_df_for_ml = st.session_state.get("tower_schedule_filtered_df")
+            _tower_span_options = []
+            _tower_distance_by_span = {}
+            if (
+                isinstance(_tower_df_for_ml, pd.DataFrame)
+                and not _tower_df_for_ml.empty
+                and "SPAN" in _tower_df_for_ml.columns
+            ):
+                _tower_df_for_ml = _tower_df_for_ml.copy()
+                if "KUMULATIF km" not in _tower_df_for_ml.columns and "KUMULATIF" in _tower_df_for_ml.columns:
+                    _tower_df_for_ml["KUMULATIF km"] = pd.to_numeric(
+                        _tower_df_for_ml["KUMULATIF"].astype(str).str.replace(",", ".", regex=False),
+                        errors="coerce",
+                    ) / 1000.0
+                _tower_span_options = [
+                    str(value).strip()
+                    for value in _tower_df_for_ml["SPAN"].dropna().astype(str)
+                    if str(value).strip() and str(value).strip().lower() not in ("nan", "none")
+                ]
+                _tower_span_options = list(dict.fromkeys(_tower_span_options))
+                if "KUMULATIF km" in _tower_df_for_ml.columns:
+                    for _, _tw_row in _tower_df_for_ml.iterrows():
+                        _span = str(_tw_row.get("SPAN", "")).strip()
+                        _cum = pd.to_numeric(_tw_row.get("KUMULATIF km"), errors="coerce")
+                        if _span and pd.notna(_cum):
+                            _tower_distance_by_span[_span] = float(_cum)
+            _de_calc_tower = ""
+            if _tower_distance_by_span and _de_default > 0:
+                _de_calc_tower = min(
+                    _tower_distance_by_span,
+                    key=lambda span: abs(_tower_distance_by_span[span] - _de_default),
+                )
+            loc_col1, loc_col2 = st.columns(2)
+            with loc_col1:
+                st.number_input(
+                    "Jarak Hasil Perhitungan DE (km)",
+                    min_value=0.0,
+                    max_value=max(_line_length * 1.25, _de_default, 1.0),
+                    value=min(max(_de_default, 0.0), max(_line_length * 1.25, _de_default, 1.0)),
+                    step=0.001,
+                    format="%.6f",
+                    disabled=True,
+                    help="Nilai DE raw dari hasil kalkulasi aplikasi.",
+                )
+                st.text_input(
+                    "Nomor Tower Hasil Kalkulasi DE",
+                    value=_de_calc_tower,
+                    disabled=True,
+                    help="Tower dari Tower Schedule yang paling dekat dengan jarak DE raw.",
+                )
+                if _tower_span_options:
+                    _tower_options = ["Pilih Nomor Tower Aktual"] + _tower_span_options
+                    if st.session_state.get("fault_location_actual_tower") not in _tower_options:
+                        st.session_state["fault_location_actual_tower"] = "Pilih Nomor Tower Aktual"
+                    actual_tower_selected = st.selectbox(
+                        "Nomor Tower Aktual Hasil Inspeksi Lapangan",
+                        _tower_options,
+                        key="fault_location_actual_tower",
+                    )
+                    actual_tower = "" if actual_tower_selected == "Pilih Nomor Tower Aktual" else actual_tower_selected
+                    st.caption("Opsi tower diambil dari Tower Schedule yang sudah difilter.")
+                else:
+                    actual_tower = st.text_input(
+                        "Nomor Tower Aktual Hasil Inspeksi Lapangan",
+                        key="fault_location_actual_tower",
+                    )
+                actual_distance_km = _tower_distance_by_span.get(actual_tower, _de_default)
+            with loc_col2:
+                actual_source = st.selectbox(
+                    "Sumber Validasi Aktual",
+                    ["Inspeksi Lapangan", "Relay/DFR Pembanding", "Tower Patrol", "Estimasi Operator", "Lainnya"],
+                    key="fault_location_actual_source",
+                )
+                field_notes = st.text_area(
+                    "Catatan Lapangan",
+                    key="fault_location_field_notes",
+                    height=116,
+                )
+
+            _loc_row = build_fault_location_feature_row(
+                timestamp_analyzed=datetime.now().isoformat(timespec="seconds"),
+                fault_time_cfg=_ml_fault_time,
+                line_param=_ml_line,
+                excel_impedance_data=st.session_state.get("excel_impedance_data"),
+                gi_local=_ml_local_gi,
+                gi_remote=_ml_remote_gi,
+                upt_local=_active(st.session_state.get("sidebar_filter_upt_local", "")) and st.session_state.get("sidebar_filter_upt_local", "") or "",
+                ultg_local=_active(st.session_state.get("sidebar_filter_ultg_local", "")) and st.session_state.get("sidebar_filter_ultg_local", "") or "",
+                upt_remote=_active(st.session_state.get("sidebar_filter_upt_remote", "")) and st.session_state.get("sidebar_filter_upt_remote", "") or "",
+                ultg_remote=_active(st.session_state.get("sidebar_filter_ultg_remote", "")) and st.session_state.get("sidebar_filter_ultg_remote", "") or "",
+                segment=_active(st.session_state.get("sidebar_filter_segment", "")) and st.session_state.get("sidebar_filter_segment", "") or "",
+                fault_type_local=(st.session_state.get("fault_type_result") or {}).get("fault_type", ""),
+                fault_type_remote=(st.session_state.get("remote_fault_type_result") or {}).get("fault_type", ""),
+                single_result=st.session_state.get("single_ended_result"),
+                remote_single_result=st.session_state.get("remote_single_ended_result"),
+                two_result=st.session_state.get("two_ended_result"),
+                two_quality=st.session_state.get("two_ended_quality"),
+                two_status=st.session_state.get("two_ended_operating_status", ""),
+                tower_length_km=st.session_state.get("tower_schedule_selected_length_km"),
+                tower_length_source=st.session_state.get("tower_schedule_selected_length_source", ""),
+                actual_distance_km=actual_distance_km,
+                de_calculated_tower=_de_calc_tower,
+                actual_tower_inspected=actual_tower,
+                actual_source=actual_source,
+                field_notes=field_notes,
+            )
+            loc_m1, loc_m2, loc_m3 = st.columns(3)
+            loc_m1.metric("DE Raw", f"{_loc_row.get('de_raw_km') or '-'} km")
+            loc_m2.metric("Aktual", f"{_loc_row.get('actual_distance_km') or '-'} km")
+            loc_m3.metric("Error DE", f"{_loc_row.get('de_error_km') or '-'} km")
+            with st.expander("Lihat feature-vector lokasi", expanded=False):
+                st.dataframe(
+                    pd.DataFrame([{"Fitur": k, "Nilai": v} for k, v in _loc_row.items()]),
+                    hide_index=True,
+                    width="stretch",
+                )
+            loc_save_col, loc_csv_col = st.columns(2)
+            with loc_save_col:
+                if st.button("Tambah ke Sheet Lokasi", key="location_dataset_append_btn", width="stretch"):
+                    _loc_url = st.session_state.get("database_spreadsheet_url", "")
+                    if not _loc_url:
+                        st.error("Database Spreadsheet URL belum diisi di Setup DB.")
+                    elif not st.session_state.get("two_ended_result"):
+                        st.error("Hitung Double-End terlebih dahulu sebelum menyimpan dataset lokasi.")
+                    else:
+                        _ok, _msg = append_fault_location_row_to_gsheet(
+                            _loc_url,
+                            _loc_row,
+                            sheet_name=_loc_sheet_name,
+                        )
+                        (st.success if _ok else st.error)(_msg)
+            with loc_csv_col:
+                _loc_csv = ",".join(LOCATION_DATASET_COLUMNS) + "\n" + ",".join(
+                    '"' + str(_loc_row.get(c, "")).replace('"', '""') + '"' for c in LOCATION_DATASET_COLUMNS
+                )
+                st.download_button(
+                    "Unduh Baris Lokasi (CSV)",
+                    data=_loc_csv,
+                    file_name=f"fault_location_row_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    width="stretch",
+                    key="location_dataset_csv_btn",
+                )
+
+        with ml_model_tab:
+            st.markdown("### Model Kalibrasi")
+            st.info(
+                "Training model belum diaktifkan. Setelah dataset `fault_location` cukup, "
+                "model yang disarankan adalah residual correction: DE corrected = DE raw + "
+                "prediksi(actual_distance_km - de_raw_km)."
+            )
+
+
 with tab_tower:
     st.subheader("Tower Schedule")
 
@@ -2524,6 +2841,7 @@ with tab_tower:
         "LATITUDE",
         "LONGITUDE",
         "SEGMENT",
+        "UPT",
         "ULTG",
         "TYPE STRING",
         "JUMLAH STRING",
@@ -2531,7 +2849,7 @@ with tab_tower:
 
     st.caption(
         "Data tower schedule dibaca dari spreadsheet terpisah. Kolom utama: "
-        "SPAN, JARAK, KUMULATIF, LATITUDE, LONGITUDE, SEGMENT, ULTG, TYPE STRING, JUMLAH STRING."
+        "SPAN, JARAK, KUMULATIF, LATITUDE, LONGITUDE, SEGMENT, UPT, ULTG, TYPE STRING, JUMLAH STRING."
     )
 
     st.session_state.setdefault("tower_schedule_url", DEFAULT_TOWER_SCHEDULE_URL)
@@ -2552,12 +2870,12 @@ with tab_tower:
             tower_filter_options_df = read_google_spreadsheet_query_cached(
                 st.session_state["tower_schedule_url"],
                 st.session_state["tower_schedule_sheet_name"],
-                "select F, G where F is not null or G is not null",
+                "select F, G, H where F is not null or G is not null or H is not null",
             )
             tower_filter_options_df = make_streamlit_safe_columns(tower_filter_options_df)
             tower_filter_options_df.columns = [str(col).strip() for col in tower_filter_options_df.columns]
         except Exception as e:
-            st.warning("Daftar ULTG/Segment belum dapat dibaca. Gunakan input manual atau cek akses spreadsheet.")
+            st.warning("Daftar Segment/UPT/ULTG belum dapat dibaca. Gunakan input manual atau cek akses spreadsheet.")
             st.caption(str(e))
 
     def _preload_options_from_df(df, column_name):
@@ -2692,7 +3010,7 @@ with tab_tower:
                     + ", ".join(missing_tower_columns)
                 )
     
-            filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+            filter_col1, filter_col2, filter_col3, filter_col4, filter_col5 = st.columns([1.4, 1, 1, 1, 1.3])
     
             def _tower_options(column_name):
                 if column_name not in tower_df.columns:
@@ -2724,18 +3042,24 @@ with tab_tower:
                     key=_segment_key,
                 )
             with filter_col2:
+                selected_upt = st.selectbox(
+                    "UPT",
+                    _tower_options("UPT"),
+                    key="tower_schedule_upt_filter",
+                )
+            with filter_col3:
                 selected_ultg = st.selectbox(
                     "ULTG",
                     _tower_options("ULTG"),
                     key="tower_schedule_ultg_filter",
                 )
-            with filter_col3:
+            with filter_col4:
                 selected_type_string = st.selectbox(
                     "Type String",
                     _tower_options("TYPE STRING"),
                     key="tower_schedule_type_string_filter",
                 )
-            with filter_col4:
+            with filter_col5:
                 tower_search = st.text_input(
                     "Cari span / teks",
                     value="",
@@ -2746,6 +3070,10 @@ with tab_tower:
             if selected_segment != "Semua" and "SEGMENT" in filtered_tower_df.columns:
                 filtered_tower_df = filtered_tower_df[
                     filtered_tower_df["SEGMENT"].astype(str).map(_norm_filter) == _norm_filter(selected_segment)
+                ]
+            if selected_upt != "Semua" and "UPT" in filtered_tower_df.columns:
+                filtered_tower_df = filtered_tower_df[
+                    filtered_tower_df["UPT"].astype(str).str.strip() == selected_upt
                 ]
             if selected_ultg != "Semua" and "ULTG" in filtered_tower_df.columns:
                 filtered_tower_df = filtered_tower_df[
@@ -2809,6 +3137,7 @@ with tab_tower:
                 st.session_state["tower_schedule_selected_length_source"] = tower_length_source
                 st.session_state["tower_schedule_selected_rows"] = int(len(filtered_tower_df))
                 st.session_state["tower_schedule_selected_segment"] = selected_segment
+                st.session_state["tower_schedule_selected_upt"] = selected_upt
                 st.session_state["tower_schedule_selected_ultg"] = selected_ultg
                 st.caption(
                     f"Panjang line Tower Schedule untuk DE: {tower_length_km:.6f} km "
@@ -3304,70 +3633,6 @@ with summary_container:
 
     if _references:
         st.caption(f"*Referensi: {_references}*")
-
-    # -- Pengumpulan dataset berlabel (jembatan rule -> ML) --------------
-    with st.expander("Dataset Penyebab (untuk Pelatihan ML)", expanded=False):
-        _ds_sheet_name = st.session_state.get("fault_cause_sheet_name") or "fault_cause"
-        st.caption(
-            f"Rekam feature-vector kasus ini + penyebab terkonfirmasi (setelah inspeksi lapangan) "
-            f"ke sheet `{_ds_sheet_name}` pada Database Spreadsheet. Dataset berlabel ini menjadi bahan "
-            "pelatihan model ML penentuan penyebab di masa depan."
-        )
-        _ds_line = (st.session_state.get("effective_line_param") or st.session_state.get("line_param") or {})
-        _ds_confirmed = st.selectbox(
-            "Penyebab Terkonfirmasi (hasil inspeksi)",
-            CONFIRMED_CAUSE_LABELS,
-            index=len(CONFIRMED_CAUSE_LABELS) - 1,  # default "Belum Diketahui"
-            key="dataset_confirmed_cause",
-        )
-        _ds_row = build_fault_cause_feature_row(
-            timestamp_analyzed=datetime.now().isoformat(timespec="seconds"),
-            fault_time_cfg=_summary_fault_dt.isoformat(timespec="seconds") if _summary_fault_dt else "",
-            line_name=_ds_line.get("line_name", ""),
-            gi_local=_local_gi, gi_remote=_remote_gi,
-            upt=_active(st.session_state.get("sidebar_filter_upt", "")) and st.session_state.get("sidebar_filter_upt", "") or "",
-            ultg=_active(st.session_state.get("sidebar_filter_ultg", "")) and st.session_state.get("sidebar_filter_ultg", "") or "",
-            upt_local=_active(st.session_state.get("sidebar_filter_upt_local", "")) and st.session_state.get("sidebar_filter_upt_local", "") or "",
-            ultg_local=_active(st.session_state.get("sidebar_filter_ultg_local", "")) and st.session_state.get("sidebar_filter_ultg_local", "") or "",
-            upt_remote=_active(st.session_state.get("sidebar_filter_upt_remote", "")) and st.session_state.get("sidebar_filter_upt_remote", "") or "",
-            ultg_remote=_active(st.session_state.get("sidebar_filter_ultg_remote", "")) and st.session_state.get("sidebar_filter_ultg_remote", "") or "",
-            segment=_active(st.session_state.get("sidebar_filter_segment", "")) and st.session_state.get("sidebar_filter_segment", "") or "",
-            fault_type_result=fault_type_summary,
-            high_resistance_result=st.session_state.get("high_resistance_result"),
-            phasors=st.session_state.get("phasors"),
-            fault_hour=_summary_fault_hour, fault_month=_summary_fault_month,
-            weather_context=st.session_state.get("summary_weather_context"),
-            waveform_signatures=st.session_state.get("summary_waveform_signatures"),
-            single_result=st.session_state.get("single_ended_result"),
-            two_result=st.session_state.get("two_ended_result"),
-            two_quality=st.session_state.get("two_ended_quality"),
-            predicted_cause=estimated_cause,
-            predicted_score=(estimated_cause_detail.get("candidates") or [{}])[0].get("Skor"),
-            confirmed_cause=_ds_confirmed,
-        )
-        with st.expander("Lihat feature-vector kasus ini", expanded=False):
-            st.dataframe(
-                pd.DataFrame([{"Fitur": k, "Nilai": v} for k, v in _ds_row.items()]),
-                hide_index=True, width="stretch",
-            )
-        _ds_col1, _ds_col2 = st.columns(2)
-        with _ds_col1:
-            if st.button("Tambah ke Google Sheet", key="dataset_append_btn", width="stretch"):
-                _ds_url = st.session_state.get("database_spreadsheet_url", "")
-                if not _ds_url:
-                    st.error("Database Spreadsheet URL belum diisi di Setup DB.")
-                else:
-                    _ok, _msg = append_feature_row_to_gsheet(_ds_url, _ds_row, sheet_name=_ds_sheet_name)
-                    (st.success if _ok else st.error)(_msg)
-        with _ds_col2:
-            _ds_csv = ",".join(DATASET_COLUMNS) + "\n" + ",".join(
-                '"' + str(_ds_row.get(c, "")).replace('"', '""') + '"' for c in DATASET_COLUMNS
-            )
-            st.download_button(
-                "Unduh Baris (CSV)", data=_ds_csv,
-                file_name=f"fault_cause_row_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv", width="stretch", key="dataset_csv_btn",
-            )
 
     st.markdown("### Grafik SE dan DE")
     _sloc_key = (

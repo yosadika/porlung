@@ -318,7 +318,7 @@ _PROTECTION_BADGE_COLS = frozenset([
 _NEARBY_HIDDEN_COLS = frozenset([
     "Fault Context", "Distance from Fault km",
     "JARAK km", "KUMULATIF km", "JARAK", "KUMULATIF",
-    "LATITUDE", "LONGITUDE", "SEGMENT", "ULTG",
+    "LATITUDE", "LONGITUDE", "SEGMENT", "UPT", "ULTG",
 ])
 
 # Kolom utama yang ditampilkan sebagai kolom tabel
@@ -601,6 +601,7 @@ def render_tower_map(
         longitude_value = tower_row.get("LONGITUDE", "-")
         tower_lat = float(tower_row["lat"])
         tower_lon = float(tower_row["lon"])
+        upt_value = tower_row.get("UPT", "-")
         ultg_value = tower_row.get("ULTG", "-")
         segment_value = tower_row.get("SEGMENT", "-")
         type_string_value = tower_row.get("TYPE STRING", "-")
@@ -610,6 +611,7 @@ def render_tower_map(
                 ("Jarak", jarak_value),
                 ("Kumulatif", cumulative_value),
                 ("Segment", segment_value),
+                ("UPT", upt_value),
                 ("ULTG", ultg_value),
                 ("Type", type_string_value),
                 ("String", jumlah_string_value),
@@ -621,8 +623,9 @@ def render_tower_map(
                 ("SPAN", span_value),
                 ("JARAK", jarak_value),
                 ("KUMULATIF", cumulative_value),
-                ("ULTG", ultg_value),
                 ("SEGMENT", segment_value),
+                ("UPT", upt_value),
+                ("ULTG", ultg_value),
                 ("TYPE STRING", type_string_value),
                 ("JUMLAH STRING", jumlah_string_value),
                 ("LATITUDE", latitude_value),

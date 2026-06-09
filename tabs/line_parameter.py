@@ -28,12 +28,28 @@ def render():
 
     st.markdown("### Sumber Data Parameter")
 
+    SOURCE_MANUAL = "Input Manual"
+    SOURCE_LINE_DATABASE = "Database Spreadsheet Line Data"
+    SOURCE_CABLE_DATABASE = "Database Spreadsheet Cable Data"
+    LEGACY_SOURCE_NAMES = {
+        "Database Excel Line Data": SOURCE_LINE_DATABASE,
+        "Database Excel Cable Data": SOURCE_CABLE_DATABASE,
+    }
+    if st.session_state.get("line_parameter_source") in LEGACY_SOURCE_NAMES:
+        st.session_state["line_parameter_source"] = LEGACY_SOURCE_NAMES[
+            st.session_state["line_parameter_source"]
+        ]
+    if st.session_state.get("excel_impedance_source") in LEGACY_SOURCE_NAMES:
+        st.session_state["excel_impedance_source"] = LEGACY_SOURCE_NAMES[
+            st.session_state["excel_impedance_source"]
+        ]
+
     line_parameter_source = st.radio(
         "Pilih sumber parameter saluran",
         [
-            "Input Manual",
-            "Database Excel Line Data",
-            "Database Excel Cable Data",
+            SOURCE_MANUAL,
+            SOURCE_LINE_DATABASE,
+            SOURCE_CABLE_DATABASE,
         ],
         horizontal=True,
         key="line_parameter_source",
@@ -64,7 +80,7 @@ def render():
         return True
 
     if (
-        line_parameter_source in ["Database Excel Line Data", "Database Excel Cable Data"]
+        line_parameter_source in [SOURCE_LINE_DATABASE, SOURCE_CABLE_DATABASE]
         and not str(st.session_state.get("database_spreadsheet_url", "") or "").strip()
     ):
         st.warning(
@@ -72,10 +88,10 @@ def render():
             "`Database Spreadsheet URL` atau upload runtime credentials terlebih dahulu. "
             "Sementara gunakan `Input Manual` untuk mengisi parameter saluran."
         )
-        line_parameter_source = "Input Manual"
+        line_parameter_source = SOURCE_MANUAL
 
-    if line_parameter_source in ["Database Excel Line Data", "Database Excel Cable Data"]:
-        use_cable_database = line_parameter_source == "Database Excel Cable Data"
+    if line_parameter_source in [SOURCE_LINE_DATABASE, SOURCE_CABLE_DATABASE]:
+        use_cable_database = line_parameter_source == SOURCE_CABLE_DATABASE
         database_source_key = "cable_data" if use_cable_database else "line_data"
         database_spreadsheet_url = st.session_state.get(
             f"{database_source_key}_spreadsheet_url",
@@ -97,7 +113,7 @@ def render():
             else "Preview Database Line Impedance"
         )
         selected_row_label_text = (
-            "Pilih jenis konduktor dari cable_data spreadsheet"
+            "Pilih jenis konduktor utama dari cable_data spreadsheet"
             if use_cable_database
             else "Pilih baris data saluran / BAY PHT"
         )
@@ -197,14 +213,9 @@ def render():
                 corrected_columns["length"] = None
 
             if not use_cable_database:
-                _f_ultg   = st.session_state.get("sidebar_filter_ultg", "")
-                _f_seg    = st.session_state.get("sidebar_filter_segment", "")
-                _f_gi_l   = st.session_state.get("sidebar_filter_gi_local", "")
-                _f_bay_l  = st.session_state.get("sidebar_filter_bay_local", "")
+                _f_gi_l = st.session_state.get("sidebar_filter_gi_local", "")
+                _f_bay_l = st.session_state.get("sidebar_filter_bay_local", "")
                 _f_line_l = st.session_state.get("sidebar_filter_line_local", "")
-                _f_gi_r   = st.session_state.get("sidebar_filter_gi_remote", "")
-                _f_bay_r  = st.session_state.get("sidebar_filter_bay_remote", "")
-                _f_line_r = st.session_state.get("sidebar_filter_line_remote", "")
 
                 def _ia(v):
                     return bool(v) and v != "Semua" and not v.startswith("Pilih ")
@@ -221,122 +232,278 @@ def render():
                 def _col_eq(series, val):
                     return series.astype(str).str.strip().apply(_nv) == _nv(val)
 
-                _filter_active = any(_ia(v) for v in [
-                    _f_ultg, _f_seg, _f_gi_l, _f_bay_l, _f_line_l,
-                    _f_gi_r, _f_bay_r, _f_line_r,
-                ])
+                _filter_active = any(_ia(v) for v in [_f_gi_l, _f_bay_l, _f_line_l])
                 if _filter_active:
                     _mask = pd.Series([True] * len(conductor_df), index=conductor_df.index)
-                    _col_ultg = corrected_columns.get("ultg")
-                    _col_seg  = corrected_columns.get("segment")
-                    _col_gi   = corrected_columns.get("gi")
-                    _col_bay  = corrected_columns.get("bay_pht")
+                    _col_gi = corrected_columns.get("gi")
+                    _col_bay = corrected_columns.get("bay_pht")
                     _col_line = corrected_columns.get("line_number")
 
-                    if _ia(_f_ultg) and _col_ultg and _col_ultg in conductor_df.columns:
-                        _mask &= _col_eq(conductor_df[_col_ultg], _f_ultg)
-                    if _ia(_f_seg) and _col_seg and _col_seg in conductor_df.columns:
-                        _mask &= _col_eq(conductor_df[_col_seg], _f_seg)
-
                     if _col_gi and _col_gi in conductor_df.columns:
-                        _has_local  = _ia(_f_gi_l) or _ia(_f_bay_l) or _ia(_f_line_l)
-                        _has_remote = _ia(_f_gi_r) or _ia(_f_bay_r) or _ia(_f_line_r)
-                        if _has_local or _has_remote:
-                            _gi_s   = conductor_df[_col_gi].astype(str).str.strip()
-                            _bay_s  = conductor_df[_col_bay].astype(str).str.strip() \
-                                if (_col_bay and _col_bay in conductor_df.columns) else None
-                            _line_s = conductor_df[_col_line].astype(str).str.strip().apply(_nv) \
-                                if (_col_line and _col_line in conductor_df.columns) else None
+                        _gi_s = conductor_df[_col_gi].astype(str).str.strip()
+                        if _ia(_f_gi_l):
+                            _mask &= _gi_s == _f_gi_l
+                    elif _ia(_f_gi_l):
+                        st.caption("Kolom GI tidak ditemukan di line_impedance; filter GI Lokal dilewati.")
 
-                            _local_m = pd.Series([True] * len(conductor_df), index=conductor_df.index)
-                            if _ia(_f_gi_l):
-                                _local_m &= _gi_s == _f_gi_l
-                            if _ia(_f_bay_l) and _bay_s is not None:
-                                _local_m &= _bay_s == _f_bay_l
-                            if _ia(_f_line_l) and _line_s is not None:
-                                _local_m &= _line_s == _nv(_f_line_l)
+                    if _col_bay and _col_bay in conductor_df.columns:
+                        _bay_s = conductor_df[_col_bay].astype(str).str.strip()
+                        if _ia(_f_bay_l):
+                            _mask &= _bay_s == _f_bay_l
+                    elif _ia(_f_bay_l):
+                        st.caption("Kolom BAY tidak ditemukan di line_impedance; filter Bay Lokal dilewati.")
 
-                            _remote_m = pd.Series([True] * len(conductor_df), index=conductor_df.index)
-                            if _ia(_f_gi_r):
-                                _remote_m &= _gi_s == _f_gi_r
-                            if _ia(_f_bay_r) and _bay_s is not None:
-                                _remote_m &= _bay_s == _f_bay_r
-                            if _ia(_f_line_r) and _line_s is not None:
-                                _remote_m &= _line_s == _nv(_f_line_r)
-
-                            if _has_local and _has_remote:
-                                _mask &= _local_m | _remote_m
-                            elif _has_local:
-                                _mask &= _local_m
-                            else:
-                                _mask &= _remote_m
+                    if _col_line and _col_line in conductor_df.columns:
+                        _line_s = conductor_df[_col_line].astype(str).str.strip().apply(_nv)
+                        if _ia(_f_line_l):
+                            _mask &= _line_s == _nv(_f_line_l)
+                    elif _ia(_f_line_l):
+                        st.caption("Kolom LINE tidak ditemukan di line_impedance; filter Line Lokal dilewati.")
 
                     conductor_df = conductor_df[_mask].reset_index(drop=True)
                     _active_parts = [
-                        f"ULTG={_f_ultg}" if _ia(_f_ultg) else None,
-                        f"Segment={_f_seg}" if _ia(_f_seg) else None,
                         f"GI Lokal={_f_gi_l}" if _ia(_f_gi_l) else None,
                         f"Bay Lokal={_f_bay_l}" if _ia(_f_bay_l) else None,
                         f"Line Lokal={_f_line_l}" if _ia(_f_line_l) else None,
-                        f"GI Remote={_f_gi_r}" if _ia(_f_gi_r) else None,
-                        f"Bay Remote={_f_bay_r}" if _ia(_f_bay_r) else None,
-                        f"Line Remote={_f_line_r}" if _ia(_f_line_r) else None,
                     ]
                     st.info(
                         "Filter sidebar aktif - "
                         + ", ".join(x for x in _active_parts if x)
                         + f". {len(conductor_df)} baris tersedia. "
-                        "Ubah di expander Filter GI / Line pada sidebar."
+                        "Data line_impedance dipilih dari GI/Bay/Line Lokal di sidebar."
                     )
                     if conductor_df.empty:
                         st.warning("Tidak ada data yang cocok dengan filter sidebar. Ubah filter di sidebar.")
+                        if st.session_state.get("excel_impedance_source") == line_parameter_source:
+                            st.session_state.pop("excel_impedance_data", None)
 
-            row_labels = build_row_label(conductor_df, corrected_columns)
-
-            selected_row_label = st.selectbox(
-                selected_row_label_text,
-                row_labels,
-                key=(
+            if not conductor_df.empty:
+                row_labels = build_row_label(conductor_df, corrected_columns)
+                selected_row_key = (
                     "selected_database_cable_row"
                     if use_cable_database
                     else "selected_database_line_row"
-                ),
-            )
-
-            selected_row_index = row_labels.index(selected_row_label)
-            selected_row = conductor_df.iloc[selected_row_index]
-
-            excel_impedance_data = extract_impedance_from_row(
-                selected_row,
-                corrected_columns,
-            )
-
-            st.session_state["excel_impedance_data"] = excel_impedance_data
-            st.session_state["excel_impedance_source"] = line_parameter_source
-
-            with st.expander("Detail data impedansi yang dipilih", expanded=False):
-                st.json(
-                    {
-                        "upt": excel_impedance_data.get("upt"),
-                        "voltage": excel_impedance_data.get("voltage"),
-                        "ultg": excel_impedance_data.get("ultg"),
-                        "gi": excel_impedance_data.get("gi"),
-                        "line_number": excel_impedance_data.get("line_number"),
-                        "segment": excel_impedance_data.get("segment"),
-                        "line_name": excel_impedance_data["line_name"],
-                        "bay_pht": excel_impedance_data["bay_pht"],
-                        "conductor_type": excel_impedance_data["conductor_type"],
-                        "length": excel_impedance_data["length"],
-                        "R1": excel_impedance_data["R1"],
-                        "X1": excel_impedance_data["X1"],
-                        "R0": excel_impedance_data["R0"],
-                        "X0": excel_impedance_data["X0"],
-                        "Z1_abs": excel_impedance_data["Z1_abs"],
-                        "Z1_angle_deg": excel_impedance_data["Z1_angle_deg"],
-                        "Z0_abs": excel_impedance_data["Z0_abs"],
-                        "Z0_angle_deg": excel_impedance_data["Z0_angle_deg"],
-                    }
                 )
+                if row_labels and st.session_state.get(selected_row_key) not in row_labels:
+                    st.session_state[selected_row_key] = row_labels[0]
+
+                use_mixed_conductors = False
+                if use_cable_database:
+                    st.markdown("#### Komposisi Konduktor Jalur")
+                    use_mixed_conductors = st.checkbox(
+                        "Gunakan kombinasi beberapa jenis konduktor",
+                        key="line_cable_use_mixed_conductors",
+                        help=(
+                            "Aktifkan jika satu jalur transmisi memiliki beberapa section "
+                            "dengan tipe konduktor berbeda. Z1/Z0 per km akan dihitung "
+                            "sebagai rata-rata berbobot panjang section."
+                        ),
+                    )
+
+                if use_mixed_conductors:
+                    selected_row_label = row_labels[0]
+                else:
+                    selected_row_label = st.selectbox(
+                        selected_row_label_text,
+                        row_labels,
+                        key=selected_row_key,
+                    )
+
+                selected_row_index = row_labels.index(selected_row_label)
+                selected_row = conductor_df.iloc[selected_row_index]
+
+                excel_impedance_data = extract_impedance_from_row(
+                    selected_row,
+                    corrected_columns,
+                )
+
+                if use_cable_database:
+                    if use_mixed_conductors:
+                        _tower_length_km_for_mix = st.session_state.get("tower_schedule_selected_length_km")
+                        default_sections = int(st.session_state.get("line_cable_mixed_section_count", 2) or 2)
+                        section_count = st.number_input(
+                            "Jumlah section konduktor",
+                            min_value=2,
+                            max_value=8,
+                            value=max(2, min(default_sections, 8)),
+                            step=1,
+                            key="line_cable_mixed_section_count",
+                        )
+                        section_count = int(section_count)
+                        auto_last_length = bool(_tower_length_km_for_mix and section_count >= 2)
+                        if _tower_length_km_for_mix:
+                            st.caption(
+                                f"Panjang Tower Schedule aktif: {float(_tower_length_km_for_mix):.6f} km. "
+                                "Isi panjang section awal; section terakhir otomatis menjadi sisa panjang."
+                            )
+                        else:
+                            st.caption(
+                                "Panjang Tower Schedule belum tersedia, sehingga semua panjang section diisi manual."
+                            )
+
+                        mixed_rows = []
+                        total_section_length = 0.0
+                        weighted_r1 = weighted_x1 = weighted_r0 = weighted_x0 = 0.0
+                        selected_section_names = []
+                        default_each_length = (
+                            float(_tower_length_km_for_mix) / section_count
+                            if _tower_length_km_for_mix
+                            else 1.0
+                        )
+                        manual_length_sum = 0.0
+
+                        for section_idx in range(section_count):
+                            col_type, col_len = st.columns([3, 1])
+                            with col_type:
+                                section_key = f"line_cable_mixed_row_{section_idx}"
+                                if st.session_state.get(section_key) not in row_labels:
+                                    st.session_state[section_key] = (
+                                        selected_row_label if section_idx == 0 else row_labels[0]
+                                    )
+                                section_label = st.selectbox(
+                                    f"Tipe konduktor section {section_idx + 1}",
+                                    row_labels,
+                                    key=section_key,
+                                )
+                            with col_len:
+                                if auto_last_length and section_idx == section_count - 1:
+                                    section_length = max(
+                                        float(_tower_length_km_for_mix) - manual_length_sum,
+                                        0.0,
+                                    )
+                                    st.number_input(
+                                        f"Panjang section {section_idx + 1} (km)",
+                                        min_value=0.0,
+                                        value=float(section_length),
+                                        step=0.001,
+                                        format="%.6f",
+                                        disabled=True,
+                                        help="Otomatis dihitung dari total Tower Schedule dikurangi panjang section sebelumnya.",
+                                    )
+                                else:
+                                    section_length = st.number_input(
+                                        f"Panjang section {section_idx + 1} (km)",
+                                        min_value=0.0,
+                                        value=float(default_each_length),
+                                        step=0.001,
+                                        format="%.6f",
+                                        key=f"line_cable_mixed_length_{section_idx}",
+                                    )
+                                    manual_length_sum += float(section_length or 0.0)
+
+                            section_data = extract_impedance_from_row(
+                                conductor_df.iloc[row_labels.index(section_label)],
+                                corrected_columns,
+                            )
+                            length_km = float(section_length or 0.0)
+                            if length_km > 0:
+                                mixed_rows.append(
+                                    {
+                                        "Section": section_idx + 1,
+                                        "Conductor": section_data.get("conductor_type") or section_label,
+                                        "Length km": length_km,
+                                        "R1": float(section_data.get("R1") or 0.0),
+                                        "X1": float(section_data.get("X1") or 0.0),
+                                        "R0": float(section_data.get("R0") or 0.0),
+                                        "X0": float(section_data.get("X0") or 0.0),
+                                    }
+                                )
+                                total_section_length += length_km
+                                weighted_r1 += float(section_data.get("R1") or 0.0) * length_km
+                                weighted_x1 += float(section_data.get("X1") or 0.0) * length_km
+                                weighted_r0 += float(section_data.get("R0") or 0.0) * length_km
+                                weighted_x0 += float(section_data.get("X0") or 0.0) * length_km
+                                selected_section_names.append(
+                                    str(section_data.get("conductor_type") or section_label)
+                                )
+
+                        if total_section_length > 0:
+                            target_length_km = (
+                                float(_tower_length_km_for_mix)
+                                if _tower_length_km_for_mix
+                                else total_section_length
+                            )
+                            length_delta_km = total_section_length - target_length_km
+                            equivalent_r1 = weighted_r1 / total_section_length
+                            equivalent_x1 = weighted_x1 / total_section_length
+                            equivalent_r0 = weighted_r0 / total_section_length
+                            equivalent_x0 = weighted_x0 / total_section_length
+                            excel_impedance_data = dict(excel_impedance_data)
+                            excel_impedance_data.update(
+                                {
+                                    "line_name": st.session_state.get("sidebar_filter_segment", "")
+                                    or "Kombinasi Konduktor",
+                                    "bay_pht": " / ".join(dict.fromkeys(selected_section_names)),
+                                    "conductor_type": " + ".join(dict.fromkeys(selected_section_names)),
+                                    "length": total_section_length,
+                                    "R1": equivalent_r1,
+                                    "X1": equivalent_x1,
+                                    "R0": equivalent_r0,
+                                    "X0": equivalent_x0,
+                                    "Z1_abs": math.hypot(equivalent_r1, equivalent_x1),
+                                    "Z1_angle_deg": math.degrees(math.atan2(equivalent_x1, equivalent_r1)),
+                                    "Z0_abs": math.hypot(equivalent_r0, equivalent_x0),
+                                    "Z0_angle_deg": math.degrees(math.atan2(equivalent_x0, equivalent_r0)),
+                                    "mixed_conductor_sections": mixed_rows,
+                                }
+                            )
+                            st.success(
+                                "Impedansi ekuivalen dihitung dari kombinasi konduktor "
+                                f"sepanjang {total_section_length:.6f} km."
+                            )
+                            mixed_display_df = pd.DataFrame(mixed_rows)
+                            total_row = {
+                                "Section": "TOTAL",
+                                "Conductor": "Valid" if abs(length_delta_km) <= 1e-6 else "Cek total panjang",
+                                "Length km": total_section_length,
+                                "R1": equivalent_r1,
+                                "X1": equivalent_x1,
+                                "R0": equivalent_r0,
+                                "X0": equivalent_x0,
+                            }
+                            mixed_display_df = pd.concat(
+                                [mixed_display_df, pd.DataFrame([total_row])],
+                                ignore_index=True,
+                            )
+                            st.dataframe(mixed_display_df, width="stretch")
+                            col_total, col_target, col_delta = st.columns(3)
+                            col_total.metric("Total Section", f"{total_section_length:.6f} km")
+                            col_target.metric("Target Tower Schedule", f"{target_length_km:.6f} km")
+                            col_delta.metric("Selisih", f"{length_delta_km:+.6f} km")
+                            if abs(length_delta_km) > 1e-6:
+                                st.warning(
+                                    "Total panjang kombinasi konduktor belum sama dengan panjang Tower Schedule."
+                                )
+                        else:
+                            st.warning("Total panjang section harus lebih dari 0 km.")
+
+                st.session_state["excel_impedance_data"] = excel_impedance_data
+                st.session_state["excel_impedance_source"] = line_parameter_source
+
+                with st.expander("Detail data impedansi yang dipilih", expanded=False):
+                    st.json(
+                        {
+                            "upt": excel_impedance_data.get("upt"),
+                            "voltage": excel_impedance_data.get("voltage"),
+                            "ultg": excel_impedance_data.get("ultg"),
+                            "gi": excel_impedance_data.get("gi"),
+                            "line_number": excel_impedance_data.get("line_number"),
+                            "segment": excel_impedance_data.get("segment"),
+                            "line_name": excel_impedance_data["line_name"],
+                            "bay_pht": excel_impedance_data["bay_pht"],
+                            "conductor_type": excel_impedance_data["conductor_type"],
+                            "length": excel_impedance_data["length"],
+                            "R1": excel_impedance_data["R1"],
+                            "X1": excel_impedance_data["X1"],
+                            "R0": excel_impedance_data["R0"],
+                            "X0": excel_impedance_data["X0"],
+                            "Z1_abs": excel_impedance_data["Z1_abs"],
+                            "Z1_angle_deg": excel_impedance_data["Z1_angle_deg"],
+                            "Z0_abs": excel_impedance_data["Z0_abs"],
+                            "Z0_angle_deg": excel_impedance_data["Z0_angle_deg"],
+                            "mixed_conductor_sections": excel_impedance_data.get("mixed_conductor_sections"),
+                        }
+                    )
 
         except Exception as e:
             st.error("Gagal membaca database spreadsheet.")
@@ -446,7 +613,7 @@ def render():
             if excel_impedance_data and excel_impedance_data.get("line_name"):
                 default_line_name = str(excel_impedance_data["line_name"])
             elif (
-                line_parameter_source == "Database Excel Cable Data"
+                line_parameter_source == SOURCE_CABLE_DATABASE
                 and excel_impedance_data
                 and excel_impedance_data.get("conductor_type")
             ):
@@ -742,7 +909,7 @@ def render():
 
         if excel_impedance_data:
             st.success(
-                "Parameter Z1 dan Z0 menggunakan data dari Excel impedansi konduktor/saluran."
+                "Parameter Z1 dan Z0 menggunakan data dari database spreadsheet impedansi konduktor/saluran."
             )
         else:
             st.info(

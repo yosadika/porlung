@@ -78,7 +78,13 @@ Struktur `line_impedance` aktif:
 |---|---|
 | `line_database_df` | DataFrame penuh dari sheet setelah load |
 | `excel_impedance_data` | Dict hasil ekstraksi baris yang dipilih user |
-| `excel_impedance_source` | String sumber data (`"Database Excel Line Data"` dst.) |
+| `excel_impedance_source` | String sumber data (`"Database Spreadsheet Line Data"` dst.) |
+
+> Auto-pick di tab Line Parameter memakai filter sidebar Local End (`sidebar_filter_gi_local`, `sidebar_filter_bay_local`, `sidebar_filter_line_local`) untuk mencocokkan kolom `GI`, `BAY`, dan `LINE` pada `line_impedance`. `sidebar_filter_segment` berasal dari `tower_schedule` dan tidak lagi dipakai sebagai kunci pemilihan otomatis baris impedansi.
+
+Untuk sumber `Database Spreadsheet Cable Data`, user dapat memilih beberapa baris konduktor dan panjang section masing-masing. Aplikasi menghitung impedansi ekuivalen berbobot panjang (`sum(Z_i * panjang_i) / sum(panjang_i)`) lalu menyimpan detail section di `excel_impedance_data["mixed_conductor_sections"]`.
+
+`excel_impedance_data`, termasuk `mixed_conductor_sections`, disimpan ke case ZIP dan payload `saved_cases_data` saat case disimpan via spreadsheet.
 
 #### Kolom Setting Relay Distance Opsional (`line_data`)
 
@@ -180,6 +186,10 @@ Dibaca oleh `rx_locus.py`, difilter di sidebar `app.py`.
 URL dikonfigurasi via `tower_schedule_url`. Sheet: `tower_schedule` (dapat diubah via `tower_schedule_sheet_name`).  
 Dibaca dan diproses oleh `tower_map.py`, difilter di `app.py`.
 
+Struktur aktif `tower_schedule`:
+
+`SPAN`, `JARAK`, `KUMULATIF`, `LATITUDE`, `LONGITUDE`, `SEGMENT`, `UPT`, `ULTG`, `TYPE STRING`, `JUMLAH STRING`, `CLEANING ISOLATOR L1`, `TANGGAL CLEANING L1`, `CLEANING ISOLATOR L2`, `TANGGAL CLEANING L2`, `PROTEKSI PETIR`, `DGS`, `TANGGAL PASANG DGS`, `MGGS`, `TANGGAL PASANG MGGS`, `TLA/NGLA`, `EGLA`, `TANGGAL PASANG EGLA`, `SUMUR BOR`, `TANGGAL PASANG SUMUR BOR`, `MDG`, `TANGGAL PASANG MDG`, `DMRG TIPE A`, `DMRG TIPE B`, `DMRG TIPE C`, `TANGGAL PASANG DMRG`, `MRG`, `TANGGAL PASANG MRG`, `DG`, `TANGGAL PASANG DG`, `JUMLAH PROTEKSI PETIR`, `DINDING PENAHAN TANAH`, `BALOK KOPEL`, `BRONJONG`, `DINDING BATU KALI`, `SHEET PILE`, `SHOTCRETE + SOIL NAILING`, `TOTAL DPT`, `KERAWANAN BINATANG`, `BURUNG`, `KERA`, `ULAR`, `TOTAL KERAWANAN`, `PROTEKSI BINATANG`, `JARING`, `TOGAR ABES`, `KAWAT DURI`, `TERASI KAPUR BARUS`, `TOTAL PROTEKSI BINATANG`.
+
 ### Kolom Wajib
 
 | Kolom di Spreadsheet | Satuan Asli | Diproses Menjadi | Dipakai Untuk |
@@ -190,6 +200,7 @@ Dibaca dan diproses oleh `tower_map.py`, difilter di `app.py`.
 | `LATITUDE` | desimal atau koma | `lat` (numerik) | Koordinat lintang tower |
 | `LONGITUDE` | desimal atau koma | `lon` (numerik) | Koordinat bujur tower |
 | `SEGMENT` | — | — | Filter segmen; pre-fill dari sidebar |
+| `UPT` | — | — | Nama Unit Pelaksana Transmisi; filter tampilan tower |
 | `ULTG` | — | — | Filter ULTG; pre-fill dari sidebar |
 
 ### Kolom Tampilan Tabel & Popup
@@ -265,7 +276,7 @@ Kolom-kolom ini tidak ditampilkan sebagai kolom tabel biasa, melainkan dirangkum
 
 ### Kolom yang Disembunyikan dari Tabel (tetap ada di DataFrame backend)
 
-`Fault Context`, `Distance from Fault km`, `JARAK`, `KUMULATIF`, `JARAK km`, `KUMULATIF km`, `LATITUDE`, `LONGITUDE`, `SEGMENT`, `ULTG`
+`Fault Context`, `Distance from Fault km`, `JARAK`, `KUMULATIF`, `JARAK km`, `KUMULATIF km`, `LATITUDE`, `LONGITUDE`, `SEGMENT`, `UPT`, `ULTG`
 
 ### Session State yang Diisi
 
@@ -276,6 +287,7 @@ Kolom-kolom ini tidak ditampilkan sebagai kolom tabel biasa, melainkan dirangkum
 | `tower_schedule_selected_length_km` | Panjang saluran dari tower schedule (km) |
 | `tower_schedule_selected_length_source` | Keterangan sumber panjang (`"max(KUMULATIF km)"` dst.) |
 | `tower_schedule_selected_segment` | Segment yang aktif |
+| `tower_schedule_selected_upt` | UPT yang aktif |
 | `tower_schedule_selected_ultg` | ULTG yang aktif |
 
 ---
@@ -288,7 +300,7 @@ Filter GI/line berada di sidebar, tetapi dikelompokkan di expander upload rekama
 |---|---|---|---|
 | `sidebar_filter_upt_local` | `UPT` | `distance_settings` | UPT Local End |
 | `sidebar_filter_ultg_local` | `ULTG` | `distance_settings` | ULTG Local End, difilter UPT local |
-| `sidebar_filter_segment` | `SEGMENT` | `line_impedance` | Segment Local End, difilter UPT/ULTG local |
+| `sidebar_filter_segment` | `SEGMENT` | `tower_schedule` | Segment Local End, difilter memakai UPT/ULTG local |
 | `sidebar_filter_gi_local` | `GI` | `distance_settings` | GI Local End |
 | `sidebar_filter_bay_line_local` | `BAY` + `LINE` | `distance_settings` | Pilihan gabungan Bay/Line Local End |
 | `sidebar_filter_bay_local` | `BAY` | `distance_settings` | Bay Local End hasil parse dari `sidebar_filter_bay_line_local` |
@@ -352,6 +364,26 @@ Dirakit oleh `fault_cause_dataset.build_fault_cause_feature_row()` (48 kolom, `D
 | Lokasi | `se_distance_km`, `de_distance_km`, `de_quality` |
 | Prediksi rule | `predicted_cause`, `predicted_score` |
 | **Target (label)** | `confirmed_cause` (diisi user dari `CONFIRMED_CAUSE_LABELS` setelah inspeksi) |
+
+---
+
+## Sheet: `fault_location` (ditulis aplikasi)
+
+Default sheet name: `fault_location` (override via `fault_location_sheet_name` / credentials `fault_location_sheet`). Berada di **Database Spreadsheet**. Ditulis oleh tab `Machine Learning > Kalibrasi Lokasi` via Sheets API dan upsert by `case_id`.
+
+Dataset ini menjadi fondasi ML kalibrasi lokasi gangguan. Target awal model adalah residual DE: `actual_distance_km - de_raw_km`.
+
+| Grup | Kolom |
+|---|---|
+| Kunci unik | `case_id` |
+| Metadata | `timestamp_analyzed`, `fault_time_cfg`, `line_name`, `gi_local`, `gi_remote`, `upt_local`, `ultg_local`, `upt_remote`, `ultg_remote`, `segment` |
+| Fault type | `fault_type_local`, `fault_type_remote` |
+| Line parameter | `line_length_km`, `line_length_source`, `z1_r_ohm_per_km`, `z1_x_ohm_per_km`, `z0_r_ohm_per_km`, `z0_x_ohm_per_km` |
+| Mixed conductor | `mixed_conductor_used`, `mixed_conductor_sections` |
+| Kalkulasi aplikasi | `se_local_km`, `se_remote_from_remote_km`, `se_remote_from_local_km`, `de_raw_km`, `de_raw_pct`, `de_quality`, `de_status` |
+| Tower schedule | `tower_length_km`, `tower_length_source` |
+| Label lapangan | `actual_distance_km`, `actual_distance_pct`, `de_calculated_tower`, `actual_tower_inspected`, `actual_source`, `field_notes` |
+| Target ML | `de_error_km`, `de_abs_error_km`, `de_error_pct`, `ml_ready` |
 
 ---
 

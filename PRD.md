@@ -30,6 +30,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - `Single-End`
 - `Double-End`
 - `R-X Locus`
+- `Machine Learning`
 
 `Tower Schedule` hanya tampil setelah pasangan rekaman GI lokal lengkap (`.cfg` + `.dat`). Jika belum lengkap, layar awal hanya menampilkan Summary ringkas.
 
@@ -63,6 +64,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - **`summary_helpers.py`** — Pemilihan sinyal fault utama, waveform fokus Summary, estimasi penyebab gangguan (candidate-scoring multi-fitur), scoring single-ended, grafik posisi SE/DE, `build_cause_table_html()`. Fungsi yang membaca `st.session_state` langsung tetap di `app.py`.
 - **`waveform_signatures.py`** — Tanda waveform penyebab gangguan dari raw COMTRADE: transien/HF (`di_dt_norm`, `hf_ratio`, `transient_sharp`), durasi gangguan, clear/reclose. `compute_waveform_signatures()`.
 - **`fault_cause_dataset.py`** — Dataset berlabel penyebab (jembatan rule→ML): `build_fault_cause_feature_row()` (48 kolom, kunci `case_id`), upsert ke sheet `fault_cause` via Sheets API. Helper generik `upsert_row_to_gsheet()`/`read_sheet_records()` (dipakai juga `cloud_cases`).
+- **`fault_location_dataset.py`** — Dataset kalibrasi lokasi gangguan untuk ML residual DE: hasil SE/DE, parameter line, mixed conductor, Tower Schedule, dan lokasi aktual lapangan ke sheet `fault_location`.
 - **`cloud_cases.py`** — Simpan/muat case via spreadsheet (payload ZIP base64 chunked ke `saved_cases_data`, indeks ke `saved_cases`; tanpa Drive). `save_case_to_cloud()`, `list_saved_cases()`, `load_case_from_cloud()`.
 - **`tabs/`** — Modul render per-tab, masing-masing mengekspos `render(...)` yang dipanggil `app.py`:
   - `tabs/line_parameter.py` — Tab `Line`. Signature: `render()`.
@@ -80,7 +82,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 7. Jika local belum lengkap, hanya Summary ringkas yang ditampilkan.
 8. Jika local lengkap, COMTRADE dibaca dengan `read_comtrade_cached()`.
 9. Auto signal assignment local dihitung dan disimpan di `st.session_state`.
-10. Tab utama dibuat: Summary → Setup DB → Tower Schedule → Local End → Remote End → Line → HR Check → Single-End → Double-End → R-X Locus.
+10. Tab utama dibuat: Summary → Setup DB → Tower Schedule → Local End → Remote End → Line → HR Check → Single-End → Double-End → R-X Locus → Machine Learning.
 
 ### Flow Setup DB dan Case Storage
 
@@ -104,13 +106,14 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Local COMTRADE wajib: `.cfg` dan `.dat`.
 - Remote COMTRADE opsional: dipakai untuk Double-End, remote HR, remote SE, remote R-X locus, dan perbandingan summary.
 - Sidebar menerima `Load Case (.zip)` untuk memulihkan rekaman, parameter user, dan hasil kalkulasi.
-- Filter upload Local End: UPT/ULTG dari `distance_settings`, Segment dari `line_impedance`, GI dan Bay/Line dari `distance_settings`.
+- Filter upload Local End: UPT/ULTG dari `distance_settings`, Segment dari `tower_schedule` (difilter memakai UPT/ULTG lokal), GI dan Bay/Line dari `distance_settings`.
+- Auto-pick `line_impedance` pada tab Line Parameter memakai pilihan filter Local End: `GI` + `BAY` + `LINE`. `SEGMENT` sidebar dipakai untuk konteks tower/line, bukan lagi sebagai kunci pemilihan otomatis impedansi saluran.
 - Filter upload Remote End: UPT/ULTG dari `distance_settings`, GI dan Bay/Line dari `distance_settings`; remote tidak memilih Segment sendiri.
 - Segment hanya dipilih di Local End agar satu segment/line menjadi konteks line/tower, tetapi UPT/ULTG local dan remote boleh berbeda untuk kasus GI local dan GI remote berada di UPT/ULTG berbeda. Legacy session key `sidebar_filter_upt` dan `sidebar_filter_ultg` tetap diisi dari pilihan Local End.
 - Dropdown filter upload end hanya muncul jika Database Spreadsheet URL tersedia dari credentials, secret/env, atau input Setup DB. Jika belum tersedia, sidebar upload hanya menampilkan uploader rekaman.
 - Database spreadsheet utama: line parameter dan distance relay settings.
 - Spreadsheet tower schedule terpisah: data tower, panjang line alternatif, map, dan fault location map.
-- File Excel/Google Sheet conductor impedance: sumber parameter konduktor/line opsional.
+- Database Spreadsheet conductor/line impedance: sumber parameter konduktor/line opsional.
 
 ---
 
@@ -179,6 +182,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - `line_param` berisi minimal: `line_name`, `length_km`, `Z1_per_km`, `Z0_per_km`, `Z1_total`, `Z0_total`, `K0`.
 - Konversi panjang via `convert_length_to_km` (meter/kilometer/mile).
 - Impedansi dapat dibangun dari: R/X, magnitude/angle, X dan phi, primary/secondary dengan konversi CT/VT.
+- Jika sumber `Database Spreadsheet Cable Data` dipilih, user dapat mengaktifkan komposisi beberapa jenis konduktor per section. Aplikasi menghitung `Z1_per_km` dan `Z0_per_km` ekuivalen sebagai rata-rata berbobot panjang section: `sum(Z_i * panjang_i) / sum(panjang_i)`. Ini dipakai untuk meningkatkan akurasi SE/DE pada jalur transmisi dengan kombinasi tipe konduktor.
 - Nama GI local dan remote diinfer dari `line_name`; jika tidak sesuai, user harus memperbaiki line parameter.
 - **Sumber panjang line untuk kalkulasi:** selector global ada di tab Line (sebelum Normalize). Pilihan: `line_parameter` atau `tower_schedule`. Hasil disimpan ke `st.session_state["effective_line_param"]`.
 - `effective_line_param` adalah dict identik `line_param` kecuali `length_km`, `Z1_total`, `Z0_total` yang sudah dioverride sesuai sumber yang dipilih.
@@ -191,13 +195,13 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 
 - Tidak ada URL default yang di-hardcode (repo public). URL diisi dari runtime credentials, Streamlit secrets, env var, atau input manual Setup DB.
 - Sheet default: `tower_schedule`.
-- Kolom utama: `SPAN`, `JARAK`, `KUMULATIF`, `LATITUDE`, `LONGITUDE`, `SEGMENT`, `ULTG`, `TYPE STRING`, `JUMLAH STRING`.
+- Kolom utama: `SPAN`, `JARAK`, `KUMULATIF`, `LATITUDE`, `LONGITUDE`, `SEGMENT`, `UPT`, `ULTG`, `TYPE STRING`, `JUMLAH STRING`.
 - Kolom tambahan spreadsheet harus tetap dipertahankan (cleaning, proteksi petir, DGS, MGGS, TLA/NGLA, EGLA, sumur bor, MDG, DMRG, MRG, DG, dinding penahan, kerawanan binatang, dll.).
 - `JARAK` dan `KUMULATIF` dari spreadsheet dianggap meter. Aplikasi menambahkan `JARAK km` dan `KUMULATIF km`.
 - Tampilan km: 6 desimal pada tabel utama (berpengaruh ke kalkulasi DE/SE).
 - Panjang line dari tower schedule: prioritas `max(KUMULATIF km)`, fallback `sum(JARAK km)`, disimpan ke `tower_schedule_selected_length_km`.
 - Filter awal load: fokus pada `Segment` saja (prefill dari filter upload Local End); tidak ada filter awal ULTG agar satu segment tetap dapat memuat tower dengan UPT/ULTG berbeda. Opsi `Load semua data` tersedia tapi tidak default. Segment matching adaptif terhadap variasi tanda hubung seperti `GNTUA-SBHAN` dan `GNTUA - SBHAN`.
-- Filter setelah load: Segment, ULTG, Type String, pencarian span/teks.
+- Filter setelah load: Segment, UPT, ULTG, Type String, pencarian span/teks.
 
 ---
 
@@ -208,7 +212,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Kontrol peta dalam expander `Map Settings`: default tertutup di Summary/report, default terbuka di Tower Schedule/exploration.
 - Kontrol layer bawaan Leaflet/Folium disembunyikan; pilihan layer dikendalikan oleh kontrol Streamlit.
 - Marker tower: size 10, label ringkas dari kolom `SPAN` (contoh: `#0164`), nama lengkap di hover/popup.
-- Popup tower: SPAN, JARAK, KUMULATIF, ULTG, SEGMENT, TYPE STRING, JUMLAH STRING, LATITUDE/LONGITUDE, link `Open Maps` dan `Directions`.
+- Popup tower: SPAN, JARAK, KUMULATIF, SEGMENT, UPT, ULTG, TYPE STRING, JUMLAH STRING, LATITUDE/LONGITUDE, link `Open Maps` dan `Directions`.
 - Fault location source: default DE jika tersedia, fallback SE local. SE remote dikonversi ke `line_length - remote_distance`.
 - Fault interpolation: memakai `KUMULATIF km`, mencari dua tower pengapit, koordinat dihitung dengan interpolasi linear latitude/longitude. Jika fault di luar range data, marker di ujung dan warning muncul.
 - Marker fault: crosshair presisi, span pengapit di-highlight merah, label permanen menampilkan sumber/jarak/rasio span, label diposisikan adaptif menjauh dari arah span pengapit.
@@ -219,7 +223,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
   - Badge induk (misal "Proteksi Petir") hanya muncul jika tidak ada satu pun sub-device yang terisi.
   - Badge menampilkan tanggal pemasangan jika tersedia di spreadsheet.
   - Baris `Before fault span` / `After fault span` ditandai dengan background merah muda; `Closest tower` dengan kuning.
-  - Kolom Fault Context, Distance from Fault km, JARAK, KUMULATIF, LATITUDE, LONGITUDE, SEGMENT, ULTG disembunyikan dari tabel (tetap ada di DataFrame backend).
+  - Kolom Fault Context, Distance from Fault km, JARAK, KUMULATIF, LATITUDE, LONGITUDE, SEGMENT, UPT, ULTG disembunyikan dari tabel (tetap ada di DataFrame backend).
 - Cuaca terkini di titik gangguan ditampilkan di bawah Tower Map (lihat bagian Weather).
 
 ---
@@ -346,10 +350,20 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
   - **Tanda waveform** (`waveform_signatures.py` dari raw COMTRADE) — transien/HF tajam (`di_dt_norm`, `hf_ratio`) → petir; durasi + clear/reclose → temporer (petir/satwa) vs permanen (vegetasi/isolator).
   - Kandidat: Sambaran Petir, Vegetasi/Pohon, Satwa Liar (Bird Streamer), Flashover Polusi/Isolator, Kebakaran di Bawah Saluran; 3-fasa simetris → Power Swing.
   - Output: tabel **fakta terukur** + tabel **kandidat ter-ranking** (skor + bukti) — keduanya dalam **expander** (tertutup default), tabel HTML print-friendly (`build_cause_table_html`); plus penjelasan, catatan validasi, referensi. Ambang `decisive` (skor top ≥3 & selisih ≥1) → label tegas; jika tidak → "Indikasi Awal (perlu validasi lapangan)". Konteks **Indonesia/tropis**. Referensi penyebab di `literature/fault_type/` (`.md`).
-- **Dataset Penyebab (jembatan rule → ML)**: panel expander merekam **feature-vector** kasus (48 kolom, kolom A = `case_id = sha1(line_name|fault_time_cfg)`: metadata filter UPT/ULTG/segment, komponen simetris, Rf, jam/bulan, cuaca, tanda waveform, jarak SE/DE, prediksi rule) + **penyebab terkonfirmasi** (label user pasca-inspeksi) ke sheet `fault_cause` pada Database Spreadsheet (sama dengan distance_settings/tower; **upsert by `case_id`** — re-analisis event sama memperbarui baris, header auto-migrasi; Sheets API + service account; spreadsheet di-share Editor ke email service account), fallback unduh CSV. ML belum dibangun — menunggu dataset berlabel terkumpul (`fault_cause_dataset.py`).
+- **Dataset Penyebab (jembatan rule → ML)**: dipindahkan ke tab `Machine Learning > Dataset Penyebab`. Panel merekam **feature-vector** kasus (48 kolom, kolom A = `case_id = sha1(line_name|fault_time_cfg)`: metadata filter UPT/ULTG/segment, komponen simetris, Rf, jam/bulan, cuaca, tanda waveform, jarak SE/DE, prediksi rule) + **penyebab terkonfirmasi** (label user pasca-inspeksi) ke sheet `fault_cause` pada Database Spreadsheet (upsert by `case_id`; Sheets API + service account), fallback unduh CSV.
 - Grafik SE/DE: memakai hasil paling update dari session; scoring SE via status `VALID/CHECK/UNCERTAIN` + warning count; scoring DE via `quality_score`; line length mengikuti `effective_line_param`. Label draggable + both-GI + marker filled (lihat Double-End).
 - Tower Map Summary: default DE jika tersedia, fallback SE; fokus ke dua tower pengapit; Map Settings default tertutup; tabel -5/+5 tower default terbuka saat focus fault.
 - Weather Summary: tampil setelah Tower Map punya data tower dan sumber fault.
+
+## Machine Learning
+
+- Tab `Machine Learning` memusatkan dataset berlabel dan fondasi model masa depan.
+- Sub-tab `Dataset Penyebab`: menyimpan feature-vector penyebab gangguan ke sheet `fault_cause`.
+- Sub-tab `Kalibrasi Lokasi`: menyimpan hasil kalkulasi SE/DE, parameter line/effective line, mixed conductor, panjang Tower Schedule, dan label aktual lapangan ke sheet `fault_location`.
+- Form kalibrasi lokasi menampilkan tiga field utama: `Jarak Hasil Perhitungan DE` (disabled), `Nomor Tower Hasil Kalkulasi DE` (disabled, tower terdekat dari jarak DE), dan `Nomor Tower Aktual Hasil Inspeksi Lapangan` (opsi dari kolom `SPAN` bila Tower Schedule sudah dimuat; fallback teks jika belum).
+- Target model lokasi tahap awal adalah **residual correction**, bukan mengganti rumus proteksi: `DE corrected = DE raw + prediksi(actual_distance_km - de_raw_km)`.
+- Raw DE harus tetap ditampilkan terpisah dari koreksi ML. Jika dataset belum cukup, tampilkan status belum siap, bukan prediksi palsu.
+- Credentials dapat mendefinisikan `fault_cause_sheet` dan `fault_location_sheet` pada section `[spreadsheet]` atau `[machine_learning]`.
 
 ---
 
@@ -361,14 +375,14 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 - Restore: dari sidebar sebelum validasi local COMTRADE; file dari ZIP dibungkus sebagai upload virtual dengan `.name` dan `.getvalue()`. Restore memakai MD5 hash untuk mencegah restore loop berulang.
 - Export: tombol `Export Case ZIP` di `Setup DB > Case Storage`. Nama file digenerate otomatis: `porlungcase_{line_name}_{YYYYMMDD}_{HHMMSS}.zip`.
 - **Simpan/Muat Case via Spreadsheet** (`cloud_cases.py`, di Setup DB > Case Storage): ZIP case → base64 **chunked** ke sheet `saved_cases_data` (1 baris/case, payload dipecah ≤49000 char/sel), indeks ringkas ke sheet `saved_cases` (upsert by `case_id = sha1(line_name|fault_time_cfg)`) termasuk metadata filter UPT/ULTG Local/Remote dan Segment. Daftar case dimuat **diurut `saved_at` terbaru**; pilih → rakit chunk → `restore_case_archive`; metadata indeks dipakai sebagai fallback restore filter untuk case lama. **Loader tersedia di sidebar "Case Storage"** (muncul begitu credentials/Database URL ada) sehingga user bisa memilih case tersimpan **di landing page tanpa upload COMTRADE/ZIP**; juga ada di Setup DB > Case Storage (untuk save). **TANPA Google Drive** — service account akun personal tidak punya kuota Drive (`storageQuotaExceeded`), jadi payload disimpan langsung di spreadsheet. **Melengkapi** (tidak menggantikan) save/load ZIP manual.
-- **Yang disimpan ke case ZIP:** semua session state kecuali key sensitif. `CASE_SETTINGS_KEYS` menjamin kunci berikut selalu disimpan: DB URLs, sheet names, signal assignment (channel selections + CT/VT + recorded side), line param, OpenWeather API key.
+- **Yang disimpan ke case ZIP:** semua session state kecuali key sensitif. `CASE_SETTINGS_KEYS` menjamin kunci berikut selalu disimpan: DB URLs, sheet names, signal assignment (channel selections + CT/VT + recorded side), line param/effective line param, sumber line parameter, data impedansi spreadsheet termasuk `mixed_conductor_sections`, OpenWeather API key.
 - **Yang tidak disimpan:** runtime credentials file, service account, xweather/accuweather key, bytes file upload sementara.
 
 ### Runtime Credentials
 
 - Format: file `credentials.toml` atau `credentials.json`. **Upload dilakukan di panel `Credentials` sidebar** (bukan lagi di Setup DB). Setup DB hanya menyisakan indikator credentials aktif, tombol Download Template, dan Clear (tanpa expander show/hide, tanpa uploader).
 - Hanya dibaca ke memory/session; tidak ditulis ke disk, tidak dicetak, tidak diekspor.
-- Dapat mengisi otomatis: Database Spreadsheet URL, Line/Cable/Distance sheet names, Tower Schedule URL + sheet, OpenWeather API key, Google service account opsional.
+- Dapat mengisi otomatis: Database Spreadsheet URL, Line/Cable/Distance sheet names, Tower Schedule URL + sheet, Machine Learning sheet names (`fault_cause_sheet`, `fault_location_sheet`), OpenWeather API key, Google service account opsional.
 - Tombol `Clear Runtime Credentials from Session` (di Setup DB) tersedia.
 - `.gitignore` harus mengecualikan `.streamlit/secrets.toml`, folder `credentials/` (beserta isinya), dan `*credentials*.toml`/`*credentials*.json` (prefix apa pun, mis. `porlung_credentials.toml`).
 - **Auto-load credentials lokal:** saat startup, bila belum ada credentials dimuat, aplikasi membaca `credentials/porlung_credentials.toml` (atau `credentials/credentials.toml`/`.json`), parse + apply otomatis. Tambahan: bila `runtime_gdrive_service_account` belum ada, aplikasi memindai `credentials/*.json` untuk file service account (`"type":"service_account"` + `private_key`) dan memuatnya. Service account dipakai untuk **tulis** Sheets API (dataset `fault_cause`, `saved_cases`/`saved_cases_data`). Semua file di `credentials/` **tidak pernah** di-commit (gitignored).
@@ -418,7 +432,7 @@ Dokumen ini adalah sumber kebenaran tunggal untuk spesifikasi fitur, perilaku ap
 `line_param`, `effective_line_param` (override length+Z_total dari sumber yang dipilih; dibaca oleh SE/DE/HR), `line_length_source` ("line_parameter" atau "tower_schedule")
 
 **Tower:**
-`tower_schedule_df`, `tower_schedule_filtered_df`, `tower_schedule_selected_length_km`, `tower_schedule_selected_length_source`, `tower_schedule_selected_segment`, `tower_schedule_selected_ultg`
+`tower_schedule_df`, `tower_schedule_filtered_df`, `tower_schedule_selected_length_km`, `tower_schedule_selected_length_source`, `tower_schedule_selected_segment`, `tower_schedule_selected_upt`, `tower_schedule_selected_ultg`
 
 **Case Storage:**
 `case_name`, `case_drive_folder_url`, `case_drive_folder_id`, `case_local_cfg_name`, `case_local_cfg_bytes`, `case_local_dat_name`, `case_local_dat_bytes`, `case_remote_cfg_name`, `case_remote_cfg_bytes`, `case_remote_dat_name`, `case_remote_dat_bytes`

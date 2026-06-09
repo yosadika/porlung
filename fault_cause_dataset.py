@@ -10,6 +10,7 @@ Storage: Google Sheet (Sheets API v4) via service account — reuse pola
 `case_storage`. Fallback: CSV download di UI bila kredensial tulis tak tersedia.
 """
 
+import json
 import hashlib
 import re
 
@@ -216,6 +217,15 @@ def _col_letter(n: int) -> str:
     return s
 
 
+def _sheet_scalar(value):
+    """Google Sheets values API tidak menerima dict/list; serialkan jadi teks JSON."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False)
+    return value
+
+
 def upsert_row_to_gsheet(spreadsheet_url: str, row: dict, columns: list, sheet_name: str):
     """Upsert generik satu baris ke sheet berdasarkan nilai kolom pertama (`columns[0]`).
 
@@ -242,7 +252,7 @@ def upsert_row_to_gsheet(spreadsheet_url: str, row: dict, columns: list, sheet_n
                 valueInputOption="USER_ENTERED", body={"values": [columns]},
             ).execute()
 
-        values = [[("" if row.get(c) is None else row.get(c)) for c in columns]]
+        values = [[_sheet_scalar(row.get(c)) for c in columns]]
         last_col = _col_letter(len(columns))
         key_val = str(row.get(columns[0]) or "").strip()
 

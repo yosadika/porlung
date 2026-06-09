@@ -73,6 +73,8 @@ _WIDGET_RESTORE_CLEANUP_KEYS = frozenset({
     # Tombol dataset penyebab — nilai tombol tidak boleh di-set via session_state
     "dataset_append_btn",
     "dataset_csv_btn",
+    "location_dataset_append_btn",
+    "location_dataset_csv_btn",
     # Tombol simpan/muat case via cloud
     "save_case_cloud_btn",
     "load_case_cloud_btn",
@@ -110,6 +112,8 @@ CASE_SETTINGS_KEYS = frozenset([
     "rx_locus_line_data_sheet_name",
     "cable_data_sheet_name",
     "distance_settings_sheet_name",
+    "fault_cause_sheet_name",
+    "fault_location_sheet_name",
     "tower_schedule_url",
     "tower_schedule_sheet_name",
     # Widget input keys DB Setup (agar field langsung terisi saat restore)
@@ -166,8 +170,13 @@ CASE_SETTINGS_KEYS = frozenset([
     "remote_vt_secondary",
     "remote_transformer_data",
     # Line Data
+    "line_parameter_source",
+    "excel_impedance_source",
+    "excel_impedance_data",
+    "line_length_source",
     "line_param",
     "line_param_df",
+    "effective_line_param",
 ])
 
 # Peta fallback: jika widget key tidak ada di snapshot, ambil dari value key.
@@ -290,6 +299,20 @@ def apply_runtime_credentials(payload: dict):
             ("spreadsheet", "distance_settings_sheet"),
             ("database", "distance_sheet"),
             ("distance_settings_sheet_name",),
+        ),
+        (
+            "fault_cause_sheet_name",
+            "Fault Cause Dataset Sheet",
+            ("spreadsheet", "fault_cause_sheet"),
+            ("machine_learning", "fault_cause_sheet"),
+            ("fault_cause_sheet_name",),
+        ),
+        (
+            "fault_location_sheet_name",
+            "Fault Location Dataset Sheet",
+            ("spreadsheet", "fault_location_sheet"),
+            ("machine_learning", "fault_location_sheet"),
+            ("fault_location_sheet_name",),
         ),
         (
             "tower_schedule_url",
