@@ -356,6 +356,8 @@ Dataset berlabel untuk pelatihan ML penentuan penyebab gangguan. **Ditulis** ole
 
 Dirakit oleh `fault_cause_dataset.build_fault_cause_feature_row()` (48 kolom, `DATASET_COLUMNS`):
 
+Selain tombol manual `Machine Learning > Dataset Penyebab > Tambah ke Sheet Penyebab`, baris ini juga di-upsert oleh tombol **Simpan Case ke Cloud** di sidebar dan Setup DB sebagai bagian dari general save. Nilai `confirmed_cause` mengikuti isian terakhir widget `dataset_confirmed_cause`; jika belum pernah diisi, default `Belum Diketahui`.
+
 | Grup | Kolom |
 |---|---|
 | **Kunci unik** | `case_id` (kolom A — upsert key) |
@@ -380,6 +382,8 @@ Default sheet name: `fault_location` (override via `fault_location_sheet_name` /
 
 Dataset ini menjadi fondasi ML kalibrasi lokasi gangguan. Target awal model adalah residual DE: `actual_distance_km - de_raw_km`.
 
+Selain tombol manual `Machine Learning > Kalibrasi Lokasi > Tambah ke Sheet Lokasi`, baris ini juga di-upsert oleh tombol **Simpan Case ke Cloud** di sidebar dan Setup DB jika `two_ended_result` sudah tersedia. Bila Double-End belum dihitung, general save melewati `fault_location` dan tetap menyimpan case serta dataset penyebab.
+
 | Grup | Kolom |
 |---|---|
 | Kunci unik | `case_id` |
@@ -397,6 +401,8 @@ Dataset ini menjadi fondasi ML kalibrasi lokasi gangguan. Target awal model adal
 ## Sheet: `saved_cases` + `saved_cases_data` (ditulis & dibaca aplikasi)
 
 Simpan/muat case via spreadsheet — **TANPA Google Drive** (service account akun personal tidak punya kuota Drive → `storageQuotaExceeded`). **Ditulis & dibaca** via Sheets API (service account). Upsert by `case_id` (kolom A). Di **Database Spreadsheet**. Override sheet name via `saved_cases_sheet_name`.
+
+Tombol **Simpan Case ke Cloud** sekarang berperan sebagai general save: menulis `saved_cases`/`saved_cases_data`, lalu upsert `fault_cause`, dan upsert `fault_location` bila hasil Double-End sudah ada. Status tiap bagian ditampilkan terpisah agar kegagalan satu sheet mudah didiagnosis.
 
 **`saved_cases`** = indeks ringkas (1 baris/case):
 

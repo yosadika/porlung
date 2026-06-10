@@ -872,6 +872,203 @@ def _sf_vals(df, col):
 def _active(v):
     return bool(v) and v != "Semua" and not str(v).startswith("Pilih ")
 
+
+def _active_session_value(key: str) -> str:
+    value = st.session_state.get(key, "")
+    return value if _active(value) else ""
+
+
+def _build_ml_dataset_rows_from_session():
+    line_param = st.session_state.get("effective_line_param") or st.session_state.get("line_param") or {}
+    if not line_param:
+        return None, None, "Line Parameter belum tersedia."
+
+    fault_dt = (
+        get_summary_fault_event_time("cfg_trigger_time")
+        or get_summary_fault_event_time("cfg_start_time")
+    )
+    fault_time = fault_dt.isoformat(timespec="seconds") if fault_dt else ""
+    fault_hour = fault_dt.hour if fault_dt is not None else None
+    fault_month = fault_dt.month if fault_dt is not None else None
+    local_gi, remote_gi = infer_gi_names_from_line_name(line_param.get("line_name", ""))
+    local_gi = st.session_state.get("two_ended_local_gi_label") or local_gi or "GI Lokal"
+    remote_gi = st.session_state.get("two_ended_remote_gi_label") or remote_gi or "GI Remote"
+
+    wf_df = st.session_state.get("assigned_df")
+    wf_window = st.session_state.get("fault_window")
+    wf_detection = st.session_state.get("fault_detection") or {}
+    samples_per_cycle = wf_detection.get("samples_per_cycle") or st.session_state.get("local_samples_per_cycle")
+    frequency = float((st.session_state.get("local_metadata") or {}).get("frequency") or 50.0)
+    if wf_df is not None and wf_window is not None and samples_per_cycle:
+        wf_key = (int(wf_window.get("fault_index", -1)), int(samples_per_cycle), len(wf_df))
+        if st.session_state.get("_wf_sig_key") != wf_key:
+            try:
+                st.session_state["summary_waveform_signatures"] = compute_waveform_signatures(
+                    wf_df, wf_window, int(samples_per_cycle), frequency
+                )
+            except Exception:
+                st.session_state["summary_waveform_signatures"] = {}
+            st.session_state["_wf_sig_key"] = wf_key
+
+    single_for_cause = (
+        st.session_state.get("single_ended_result")
+        or st.session_state.get("two_ended_local_single_result")
+    )
+    estimated_cause, cause_detail = estimate_summary_disturbance_cause(
+        st.session_state.get("fault_type_result", {}),
+        st.session_state.get("high_resistance_result"),
+        phasors=st.session_state.get("phasors"),
+        prefault_phasors=st.session_state.get("prefault_phasors"),
+        single_result=single_for_cause,
+        two_result=st.session_state.get("two_ended_result"),
+        two_quality=st.session_state.get("two_ended_quality"),
+        line_param=line_param,
+        fault_hour=fault_hour,
+        fault_month=fault_month,
+        weather_context=st.session_state.get("summary_weather_context"),
+        waveform_signatures=st.session_state.get("summary_waveform_signatures"),
+    )
+    confirmed_cause = (
+        st.session_state.get("dataset_confirmed_cause")
+        or CONFIRMED_CAUSE_LABELS[-1]
+    )
+    cause_row = build_fault_cause_feature_row(
+        timestamp_analyzed=datetime.now().isoformat(timespec="seconds"),
+        fault_time_cfg=fault_time,
+        line_name=line_param.get("line_name", ""),
+        gi_local=local_gi,
+        gi_remote=remote_gi,
+        upt=_active_session_value("sidebar_filter_upt"),
+        ultg=_active_session_value("sidebar_filter_ultg"),
+        upt_local=_active_session_value("sidebar_filter_upt_local"),
+        ultg_local=_active_session_value("sidebar_filter_ultg_local"),
+        upt_remote=_active_session_value("sidebar_filter_upt_remote"),
+        ultg_remote=_active_session_value("sidebar_filter_ultg_remote"),
+        segment=_active_session_value("sidebar_filter_segment"),
+        fault_type_result=st.session_state.get("fault_type_result", {}),
+        high_resistance_result=st.session_state.get("high_resistance_result"),
+        phasors=st.session_state.get("phasors"),
+        fault_hour=fault_hour,
+        fault_month=fault_month,
+        weather_context=st.session_state.get("summary_weather_context"),
+        waveform_signatures=st.session_state.get("summary_waveform_signatures"),
+        single_result=single_for_cause,
+        two_result=st.session_state.get("two_ended_result"),
+        two_quality=st.session_state.get("two_ended_quality"),
+        predicted_cause=estimated_cause,
+        predicted_score=(cause_detail.get("candidates") or [{}])[0].get("Skor"),
+        confirmed_cause=confirmed_cause,
+    )
+
+    two_result = st.session_state.get("two_ended_result") or {}
+    de_default = float(
+        two_result.get("distance_from_original_local_km", two_result.get("distance_km", 0.0)) or 0.0
+    )
+    tower_df = st.session_state.get("tower_schedule_filtered_df")
+    tower_distance_by_span = {}
+    if isinstance(tower_df, pd.DataFrame) and not tower_df.empty and "SPAN" in tower_df.columns:
+        tower_df = tower_df.copy()
+        if "KUMULATIF km" not in tower_df.columns and "KUMULATIF" in tower_df.columns:
+            tower_df["KUMULATIF km"] = pd.to_numeric(
+                tower_df["KUMULATIF"].astype(str).str.replace(",", ".", regex=False),
+                errors="coerce",
+            ) / 1000.0
+        if "KUMULATIF km" in tower_df.columns:
+            for _, tower_row in tower_df.iterrows():
+                span = str(tower_row.get("SPAN", "")).strip()
+                cumulative_km = pd.to_numeric(tower_row.get("KUMULATIF km"), errors="coerce")
+                if span and pd.notna(cumulative_km):
+                    tower_distance_by_span[span] = float(cumulative_km)
+
+    de_calculated_tower = ""
+    if tower_distance_by_span and de_default > 0:
+        de_calculated_tower = min(
+            tower_distance_by_span,
+            key=lambda span: abs(tower_distance_by_span[span] - de_default),
+        )
+    actual_tower_raw = str(st.session_state.get("fault_location_actual_tower", "") or "").strip()
+    actual_tower = "" if actual_tower_raw.startswith("Pilih ") else actual_tower_raw
+    actual_distance_km = tower_distance_by_span.get(actual_tower, de_default)
+    actual_source = st.session_state.get("fault_location_actual_source") or "Inspeksi Lapangan"
+    field_notes = st.session_state.get("fault_location_field_notes") or ""
+    location_row = build_fault_location_feature_row(
+        timestamp_analyzed=datetime.now().isoformat(timespec="seconds"),
+        fault_time_cfg=fault_time,
+        line_param=line_param,
+        excel_impedance_data=st.session_state.get("excel_impedance_data"),
+        gi_local=local_gi,
+        gi_remote=remote_gi,
+        upt_local=_active_session_value("sidebar_filter_upt_local"),
+        ultg_local=_active_session_value("sidebar_filter_ultg_local"),
+        upt_remote=_active_session_value("sidebar_filter_upt_remote"),
+        ultg_remote=_active_session_value("sidebar_filter_ultg_remote"),
+        segment=_active_session_value("sidebar_filter_segment"),
+        fault_type_local=(st.session_state.get("fault_type_result") or {}).get("fault_type", ""),
+        fault_type_remote=(st.session_state.get("remote_fault_type_result") or {}).get("fault_type", ""),
+        single_result=st.session_state.get("single_ended_result"),
+        remote_single_result=st.session_state.get("remote_single_ended_result"),
+        two_result=st.session_state.get("two_ended_result"),
+        two_quality=st.session_state.get("two_ended_quality"),
+        two_status=st.session_state.get("two_ended_operating_status", ""),
+        tower_length_km=st.session_state.get("tower_schedule_selected_length_km"),
+        tower_length_source=st.session_state.get("tower_schedule_selected_length_source", ""),
+        actual_distance_km=actual_distance_km,
+        de_calculated_tower=de_calculated_tower,
+        actual_tower_inspected=actual_tower,
+        actual_source=actual_source,
+        field_notes=field_notes,
+    )
+    return cause_row, location_row, ""
+
+
+def save_general_case_to_cloud(spreadsheet_url: str, case_name: str, saved_cases_sheet: str = SAVED_CASES_SHEET):
+    messages = []
+    ok_all = True
+
+    case_ok, case_msg = save_case_to_cloud(spreadsheet_url, case_name, saved_cases_sheet)
+    ok_all = ok_all and case_ok
+    messages.append(("Case", case_ok, case_msg))
+    if case_ok:
+        st.session_state.pop("_saved_cases_cache", None)
+
+    cause_row, location_row, row_error = _build_ml_dataset_rows_from_session()
+    if row_error:
+        messages.append(("Dataset Penyebab", False, row_error))
+        messages.append(("Kalibrasi Lokasi", False, row_error))
+        ok_all = False
+    else:
+        cause_sheet = st.session_state.get("fault_cause_sheet_name") or "fault_cause"
+        cause_ok, cause_msg = append_feature_row_to_gsheet(
+            spreadsheet_url,
+            cause_row,
+            sheet_name=cause_sheet,
+        )
+        ok_all = ok_all and cause_ok
+        messages.append(("Dataset Penyebab", cause_ok, cause_msg))
+
+        if st.session_state.get("two_ended_result"):
+            location_sheet = st.session_state.get("fault_location_sheet_name") or LOCATION_DATASET_SHEET_NAME
+            location_ok, location_msg = append_fault_location_row_to_gsheet(
+                spreadsheet_url,
+                location_row,
+                sheet_name=location_sheet,
+            )
+            ok_all = ok_all and location_ok
+            messages.append(("Kalibrasi Lokasi", location_ok, location_msg))
+        else:
+            messages.append((
+                "Kalibrasi Lokasi",
+                True,
+                "Dilewati: Double-End belum dihitung.",
+            ))
+
+    summary = "\n".join(
+        f"{'[OK]' if ok else '[GAGAL]'} {label}: {message}"
+        for label, ok, message in messages
+    )
+    return ok_all, summary
+
+
 def _filt(df, col, val):
     if not _active(val) or not col or col not in df.columns:
         return df
@@ -1188,7 +1385,7 @@ if _sb_save_url and "line_param" in st.session_state:
     _sb_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", _sb_line_name).strip("_") or "case"
     _sb_case_name = f"porlungcase_{_sb_slug}"
     if st.sidebar.button("Simpan Case ke Cloud", key="sidebar_save_case_cloud_btn", width="stretch"):
-        _sb_sc_ok, _sb_sc_msg = save_case_to_cloud(_sb_save_url, _sb_case_name)
+        _sb_sc_ok, _sb_sc_msg = save_general_case_to_cloud(_sb_save_url, _sb_case_name)
         if _sb_sc_ok:
             st.session_state.pop("_saved_cases_cache", None)
             st.sidebar.success(_sb_sc_msg)
@@ -2766,7 +2963,7 @@ with tab0:
         _ccol1, _ccol2 = st.columns(2)
         with _ccol1:
             if st.button("Simpan Case ke Cloud", key="save_case_cloud_btn", width="stretch"):
-                _sc_ok, _sc_msg = save_case_to_cloud(_cloud_url, _auto_case_name, _cloud_sheet)
+                _sc_ok, _sc_msg = save_general_case_to_cloud(_cloud_url, _auto_case_name, _cloud_sheet)
                 (st.success if _sc_ok else st.error)(_sc_msg)
                 if _sc_ok:
                     st.session_state.pop("_saved_cases_cache", None)
