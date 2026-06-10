@@ -1,5 +1,7 @@
 ﻿import math
 
+from html import escape
+
 import pandas as pd
 import streamlit as st
 
@@ -19,6 +21,57 @@ from fault_cause_dataset import _build_sheets_service, _col_letter, _extract_spr
 
 
 INTERNAL_SHEET_ROW_COL = "__sheet_row_number"
+
+
+def _render_missing_impedance_alert(error_message, row_label, sheet_name, detected_columns):
+    z_columns = [
+        ("R1", detected_columns.get("z1_real")),
+        ("X1", detected_columns.get("z1_imag")),
+        ("Z1 magnitude", detected_columns.get("z1_abs")),
+        ("Z1 angle", detected_columns.get("z1_angle")),
+        ("R0", detected_columns.get("z0_real")),
+        ("X0", detected_columns.get("z0_imag")),
+        ("Z0 magnitude", detected_columns.get("z0_abs")),
+        ("Z0 angle", detected_columns.get("z0_angle")),
+    ]
+    detected_text = ", ".join(
+        f"{label}: {column}" for label, column in z_columns if column
+    ) or "Kolom Z1/Z0 belum terdeteksi"
+    st.html(
+        f"""
+        <div style="
+            border: 1px solid #fed7aa;
+            background: #fff7ed;
+            color: #7c2d12;
+            border-radius: 8px;
+            padding: 14px 16px;
+            margin: 10px 0 14px 0;
+            line-height: 1.45;
+        ">
+            <div style="font-weight: 700; margin-bottom: 4px;">
+                Data impedansi saluran pada baris ini belum lengkap.
+            </div>
+            <div>
+                Aplikasi menemukan baris yang cocok, tetapi nilai Z1/Z0 tidak dapat
+                dibaca. Periksa kolom impedansi di sheet
+                <strong>{escape(str(sheet_name))}</strong>, atau pilih baris lain.
+            </div>
+            <div style="margin-top: 10px; font-size: 0.9rem;">
+                <strong>Baris dipilih:</strong> {escape(str(row_label))}
+            </div>
+            <div style="margin-top: 4px; font-size: 0.9rem;">
+                <strong>Detail:</strong> {escape(str(error_message))}
+            </div>
+            <div style="margin-top: 4px; font-size: 0.9rem;">
+                <strong>Kolom terdeteksi:</strong> {escape(detected_text)}
+            </div>
+        </div>
+        """
+    )
+    st.info(
+        "Untuk sementara parameter saluran bisa diisi manual di bawah ini. "
+        "Setelah spreadsheet diperbaiki, pilih kembali sumber Database Spreadsheet Line Data."
+    )
 
 
 def _update_line_data_segment_cell(spreadsheet_url: str, sheet_name: str, sheet_row: int, segment_col_index: int, segment_name: str):
@@ -365,10 +418,20 @@ def render():
                                 "current_segment": selected_row.get(segment_col, ""),
                             }
 
-                excel_impedance_data = extract_impedance_from_row(
-                    selected_row,
-                    corrected_columns,
-                )
+                try:
+                    excel_impedance_data = extract_impedance_from_row(
+                        selected_row,
+                        corrected_columns,
+                    )
+                except ValueError as exc:
+                    _render_missing_impedance_alert(
+                        exc,
+                        selected_row_label,
+                        database_sheet_name,
+                        corrected_columns,
+                    )
+                    excel_impedance_data = None
+                    line_data_segment_update_context = {}
 
                 if use_cable_database:
                     if use_mixed_conductors:
@@ -1077,6 +1140,10 @@ def render():
 
     st.markdown("### Normalize Parameter")
 
+    normalized_notice = st.session_state.pop("line_parameter_normalized_notice", None)
+    if normalized_notice:
+        st.success(normalized_notice)
+
     if st.button("Normalize Line Parameter"):
         try:
             line_param = normalize_line_parameter(
@@ -1125,7 +1192,10 @@ def render():
             st.session_state["line_param_df"] = line_param_df
             st.session_state["effective_line_param"] = _eff
 
-            st.success("Parameter saluran berhasil dinormalisasi.")
+            st.session_state["line_parameter_normalized_notice"] = (
+                "Parameter saluran berhasil dinormalisasi."
+            )
+            st.rerun(scope="app")
 
         except Exception as e:
             st.error("Normalisasi parameter saluran gagal.")
