@@ -1233,7 +1233,7 @@ if _sidebar_tower_url:
 _sidebar_filter_section_visible = bool(_sidebar_db_url)
 
 # --- Simpan & Bagikan Case (tampil sebelum upload rekaman) ---
-_sb_save_url = st.session_state.get("database_spreadsheet_url", "")
+_sb_save_url = _creds_db_url
 if _sb_save_url and "line_param" in st.session_state:
     _sb_line_name = st.session_state.get("line_param", {}).get("line_name", "") or "case"
     _sb_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", _sb_line_name).strip("_") or "case"
@@ -1461,7 +1461,7 @@ elif _sb_li_active and st.session_state.get("line_parameter_source", "Input Manu
     st.session_state["line_parameter_source"] = "Database Excel Line Data"
 
 _case_loaded = bool(st.session_state.get("_restored_case_hash"))
-_sb_cs_url = st.session_state.get("database_spreadsheet_url", "")
+_sb_cs_url = _creds_db_url
 _sb_cs_sheet = st.session_state.get("saved_cases_sheet_name") or SAVED_CASES_SHEET
 with st.sidebar.expander("Case Storage", expanded=False):
     if _sb_cs_url:
@@ -1559,7 +1559,7 @@ if cfg_file is None or dat_file is None:
         )
 
         # -- Muat Case Tersimpan dari Spreadsheet ----------------------------
-        _lp_cloud_url = st.session_state.get("database_spreadsheet_url", "")
+        _lp_cloud_url = _creds_db_url
         if _lp_cloud_url:
             st.divider()
             st.markdown("### Muat Case Tersimpan")
