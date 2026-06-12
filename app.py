@@ -703,14 +703,15 @@ def install_sidebar_save_case_button_style():
     )
 
 
-def _render_share_link_widget(case_id: str, label: str = "Link untuk Dibagikan", db_url: str = ""):
-    """Tampilkan link shareable via st.code() — tombol salin bawaan Streamlit.
+def _render_share_link_widget(case_id: str, db_url: str = "", show_title: bool = True):
+    """Tampilkan pesan formal + link shareable via st.code() (tombol salin bawaan Streamlit).
     Jika DATABASE_SPREADSHEET_URL sudah dikonfigurasi sebagai secret server-side,
     link cukup ?case=<id>. Jika belum, embed spreadsheet ID di ?db=.
+    `show_title=False` untuk konteks di mana heading sudah disediakan di luar (mis. sidebar expander).
     """
     import urllib.parse as _up
 
-    # Bangun base URL dari request headers (tersedia di Streamlit >= 1.37)
+    # Bangun base URL dari request headers
     _base = ""
     try:
         _host = st.context.headers.get("host", "")
@@ -723,18 +724,46 @@ def _render_share_link_widget(case_id: str, label: str = "Link untuk Dibagikan",
     # Tentukan apakah perlu embed ?db=
     _secret_db = str(get_config_secret("DATABASE_SPREADSHEET_URL", "") or "").strip()
     _need_db_param = bool(db_url and not _secret_db)
-
     params = f"?case={case_id}"
     if _need_db_param:
         _m = re.search(r"/spreadsheets/d/([A-Za-z0-9_-]+)", db_url)
         _sid = _m.group(1) if _m else db_url
         params += f"&db={_up.quote(_sid, safe='')}"
-
     _url = f"{_base}{params}"
-    st.markdown("**Bagikan Link Case Siporlung**")
-    if label and label != "Link untuk Dibagikan":
-        st.caption(label)
-    st.code(_url, language=None)
+
+    # Ambil metadata case dari cache atau session_state
+    _case_name = _line_name = _fault_time = ""
+    for _rec in (st.session_state.get("_saved_cases_cache") or []):
+        if str(_rec.get("case_id", "")).strip() == str(case_id).strip():
+            _case_name = str(_rec.get("case_name") or "")
+            _line_name = str(_rec.get("line_name") or "")
+            _fault_time = str(_rec.get("fault_time_cfg") or _rec.get("saved_at") or "")
+            break
+    if not _line_name:
+        _lp = st.session_state.get("effective_line_param") or st.session_state.get("line_param") or {}
+        _line_name = str(_lp.get("line_name") or "")
+    if not _fault_time:
+        _meta = st.session_state.get("local_metadata") or {}
+        _fault_time = str(_meta.get("cfg_trigger_time") or _meta.get("cfg_start_time") or "")
+    if not _case_name:
+        _case_name = _line_name or case_id
+
+    # Susun pesan formal
+    _msg_lines = [
+        "Berikut link rekaman gangguan transmisi yang dapat Anda akses melalui Siporlung:",
+        "",
+    ]
+    if _case_name:
+        _msg_lines.append(f"Nama Case  : {_case_name}")
+    if _line_name:
+        _msg_lines.append(f"Saluran    : {_line_name}")
+    if _fault_time:
+        _msg_lines.append(f"Waktu Fault: {_fault_time}")
+    _msg_lines += ["", f"Link Akses : {_url}", "", "-- Siporlung - Transmission Fault Locator"]
+
+    if show_title:
+        st.markdown("**Bagikan Link Case Siporlung**")
+    st.code("\n".join(_msg_lines), language=None)
 
 
 st.title("Transmission Fault Locator")
@@ -1430,7 +1459,7 @@ if _sb_save_url and "line_param" in st.session_state:
             _sb_last_cid = _restored_hash[len("cloud:"):]
     if _sb_last_cid:
         with st.sidebar.expander("Bagikan Link Case", expanded=True):
-            _render_share_link_widget(_sb_last_cid, db_url=_sb_save_url)
+            _render_share_link_widget(_sb_last_cid, db_url=_sb_save_url, show_title=False)
 
 st.sidebar.markdown('<hr class="porlung-sidebar-divider-tight">', unsafe_allow_html=True)
 _case_loaded = bool(st.session_state.get("_restored_case_hash"))
@@ -1552,7 +1581,7 @@ if cfg_file is None or dat_file is None:
                 if _lp_cloud_sel and _lp_cloud_opts:
                     _lp_share_cid = str(_lp_cloud_opts[_lp_cloud_sel].get("case_id", ""))
                     if _lp_share_cid:
-                        _render_share_link_widget(_lp_share_cid, db_url=_lp_cloud_url)
+                        _render_share_link_widget(_lp_share_cid, db_url=_lp_cloud_url, show_title=False)
 
         # Pesan panduan jika case_id dari link belum bisa dimuat (DB URL belum tersedia)
         _qp_pending = st.session_state.pop("_qp_pending_case_id", "")
@@ -3039,7 +3068,10 @@ with tab0:
                 st.session_state.pop("_saved_cases_cache", None)
         _sc_last_cid = st.session_state.get("_last_cloud_save_case_id", "")
         if _sc_last_cid:
-            _render_share_link_widget(_sc_last_cid, label="Link Case Terakhir Disimpan", db_url=_cloud_url)
+            st.divider()
+            st.markdown("#### Bagikan Link Case Siporlung")
+            st.caption("Salin dan kirim pesan berikut untuk berbagi hasil analisis gangguan kepada rekan kerja.")
+            _render_share_link_widget(_sc_last_cid, db_url=_cloud_url, show_title=False)
 
         _sc_key = f"{_cloud_url}|{_cloud_sheet}"
         if st.session_state.get("_saved_cases_cache_key") != _sc_key or "_saved_cases_cache" not in st.session_state:
@@ -3077,8 +3109,11 @@ with tab0:
             # Share link untuk case yang dipilih dari daftar
             if _sel_label and _opts:
                 _lc_share_cid = str(_opts[_sel_label].get("case_id", ""))
-                if _lc_share_cid:
-                    _render_share_link_widget(_lc_share_cid, db_url=_cloud_url)
+                if _lc_share_cid and not _sc_last_cid:
+                    st.divider()
+                    st.markdown("#### Bagikan Link Case Siporlung")
+                    st.caption("Salin dan kirim pesan berikut untuk berbagi hasil analisis gangguan kepada rekan kerja.")
+                    _render_share_link_widget(_lc_share_cid, db_url=_cloud_url, show_title=False)
 
 
 with tab_ml:
