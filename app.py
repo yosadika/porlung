@@ -1234,6 +1234,30 @@ if _sidebar_tower_url:
 
 _sidebar_filter_section_visible = bool(_sidebar_db_url)
 
+# --- Simpan & Bagikan Case (tampil sebelum upload rekaman) ---
+_sb_save_url = st.session_state.get("database_spreadsheet_url", "")
+if _sb_save_url and "line_param" in st.session_state:
+    _sb_line_name = st.session_state.get("line_param", {}).get("line_name", "") or "case"
+    _sb_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", _sb_line_name).strip("_") or "case"
+    _sb_case_name = f"porlungcase_{_sb_slug}"
+    if st.sidebar.button("Simpan Case ke Cloud", key="sidebar_save_case_cloud_btn", width="stretch"):
+        _sb_sc_ok, _sb_sc_msg = save_general_case_to_cloud(_sb_save_url, _sb_case_name)
+        if _sb_sc_ok:
+            st.session_state.pop("_saved_cases_cache", None)
+            st.sidebar.success(_sb_sc_msg)
+        else:
+            st.sidebar.error(_sb_sc_msg)
+    install_sidebar_save_case_button_style()
+    _sb_last_cid = st.session_state.get("_last_cloud_save_case_id", "")
+    if not _sb_last_cid:
+        _restored_hash = st.session_state.get("_restored_case_hash", "")
+        if _restored_hash.startswith("cloud:"):
+            _sb_last_cid = _restored_hash[len("cloud:"):]
+    if _sb_last_cid:
+        with st.sidebar.expander("Bagikan Link Case", expanded=True):
+            _render_share_link_widget(_sb_last_cid, db_url=_sb_save_url, show_title=False)
+    st.sidebar.markdown('<hr class="porlung-sidebar-divider-tight">', unsafe_allow_html=True)
+
 _local_has_cfg = bool(st.session_state.get("local_cfg_file") is not None or st.session_state.get("case_local_cfg_bytes"))
 _local_has_dat = bool(st.session_state.get("local_dat_file") is not None or st.session_state.get("case_local_dat_bytes"))
 _local_complete = _local_has_cfg and _local_has_dat
@@ -1438,30 +1462,6 @@ elif _sb_li_active and st.session_state.get("line_parameter_source", "Input Manu
     # Sidebar aktif tapi source masih di default — pastikan sync terjadi (misal setelah case restore)
     st.session_state["line_parameter_source"] = "Database Excel Line Data"
 
-_sb_save_url = st.session_state.get("database_spreadsheet_url", "")
-if _sb_save_url and "line_param" in st.session_state:
-    _sb_line_name = st.session_state.get("line_param", {}).get("line_name", "") or "case"
-    _sb_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", _sb_line_name).strip("_") or "case"
-    _sb_case_name = f"porlungcase_{_sb_slug}"
-    if st.sidebar.button("Simpan Case ke Cloud", key="sidebar_save_case_cloud_btn", width="stretch"):
-        _sb_sc_ok, _sb_sc_msg = save_general_case_to_cloud(_sb_save_url, _sb_case_name)
-        if _sb_sc_ok:
-            st.session_state.pop("_saved_cases_cache", None)
-            st.sidebar.success(_sb_sc_msg)
-        else:
-            st.sidebar.error(_sb_sc_msg)
-    install_sidebar_save_case_button_style()
-    # Case ID: prioritas dari save terakhir, fallback dari cloud restore aktif
-    _sb_last_cid = st.session_state.get("_last_cloud_save_case_id", "")
-    if not _sb_last_cid:
-        _restored_hash = st.session_state.get("_restored_case_hash", "")
-        if _restored_hash.startswith("cloud:"):
-            _sb_last_cid = _restored_hash[len("cloud:"):]
-    if _sb_last_cid:
-        with st.sidebar.expander("Bagikan Link Case", expanded=True):
-            _render_share_link_widget(_sb_last_cid, db_url=_sb_save_url, show_title=False)
-
-st.sidebar.markdown('<hr class="porlung-sidebar-divider-tight">', unsafe_allow_html=True)
 _case_loaded = bool(st.session_state.get("_restored_case_hash"))
 with st.sidebar.expander("Case Storage", expanded=False):
     case_archive_file = st.file_uploader("Load Case (.zip)", type=["zip"], key="case_archive_file")
