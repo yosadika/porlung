@@ -1483,6 +1483,7 @@ with st.sidebar.expander("Case Storage", expanded=False):
                 _sb_cs_ok, _sb_cs_msg = load_case_from_cloud(_sb_cs_url, _sb_cs_cid, _sb_cs_sheet, defer_restore=True)
                 if _sb_cs_ok:
                     st.session_state["case_restore_message"] = _sb_cs_msg
+                    st.query_params.clear()
                     st.rerun()
                 else:
                     st.error(_sb_cs_msg)
@@ -1498,6 +1499,7 @@ if case_archive_file is not None:
         try:
             restore_case_archive(_archive_bytes)
             st.session_state["_restored_case_hash"] = _archive_hash
+            st.query_params.clear()
             st.rerun()
         except Exception as e:
             st.sidebar.error("Case gagal dimuat.")
@@ -1599,6 +1601,7 @@ if cfg_file is None or dat_file is None:
                     )
                     if _lp_ok:
                         st.session_state["case_restore_message"] = _lp_msg
+                        st.query_params.clear()
                         st.rerun()
                     else:
                         st.error(_lp_msg)
@@ -3123,6 +3126,7 @@ with tab0:
                 )
                 if _lc_ok:
                     st.success(_lc_msg)
+                    st.query_params.clear()
                     st.rerun()
                 else:
                     st.error(_lc_msg)
