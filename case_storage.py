@@ -498,7 +498,20 @@ def build_case_archive_bytes(case_name: str = ""):
     return filename, archive_buffer.getvalue()
 
 
+_TOWER_SCHEDULE_RUNTIME_KEYS = (
+    "tower_schedule_df",
+    "tower_schedule_filtered_df",
+    "tower_schedule_selected_length_km",
+    "tower_schedule_selected_length_source",
+    "tower_schedule_loaded",
+)
+
+
 def restore_case_archive(archive_bytes: bytes):
+    # Bersihkan data tower schedule dari case sebelumnya agar case baru yang
+    # tidak punya tower schedule tidak mewarisi data tower yang salah.
+    for _tsk in _TOWER_SCHEDULE_RUNTIME_KEYS:
+        st.session_state.pop(_tsk, None)
     with zipfile.ZipFile(io.BytesIO(archive_bytes), "r") as archive:
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         state = json.loads(archive.read("case_state.json").decode("utf-8"))
