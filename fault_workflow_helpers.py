@@ -355,7 +355,8 @@ _FC_SYNC_PARTNERS = {
 
 def _sync_checkbox(src_key: str, dst_key: str) -> None:
     """on_change callback: langsung set nilai partner checkbox ke nilai yang sama."""
-    st.session_state[dst_key] = st.session_state[src_key]
+    if src_key in st.session_state:
+        st.session_state[dst_key] = st.session_state[src_key]
 
 
 def _seed_widget_default(key: str, value):
