@@ -730,6 +730,70 @@ def install_sidebar_save_case_button_style():
     st.html(html, width="content", unsafe_allow_javascript=True)
 
 
+def _render_share_link_widget(case_id: str, label: str = "Link untuk Dibagikan", db_url: str = ""):
+    """Tampilkan input URL shareable + tombol salin via JS.
+    Jika DATABASE_SPREADSHEET_URL sudah dikonfigurasi sebagai secret server-side,
+    link cukup ?case=<id> tanpa ?db= — lebih pendek dan lebih bersih.
+    Jika belum, embed spreadsheet ID di ?db= agar penerima tidak perlu upload credentials.
+    """
+    import json as _json
+    safe_id = re.sub(r"[^a-zA-Z0-9]", "", case_id)
+    # Jika URL sudah tersedia dari secret server-side, tidak perlu embed ?db= di link
+    _secret_db = str(get_config_secret("DATABASE_SPREADSHEET_URL", "") or "").strip()
+    _need_db_param = bool(db_url and not _secret_db)
+    db_url_js = _json.dumps(db_url if _need_db_param else "")
+    st.caption(label)
+    st.html(
+        f"""
+        <div style="display:flex;align-items:center;gap:6px;margin:2px 0 6px 0">
+            <input id="surl-{safe_id}" type="text" readonly
+                   style="flex:1;padding:5px 8px;border:1px solid #d0d0d0;border-radius:4px;
+                          font-size:12px;font-family:monospace;background:#f5f5f5;color:#333"
+                   value="(memuat URL...)" />
+            <button id="sbtn-{safe_id}" onclick="copySurl_{safe_id}()"
+                    style="padding:5px 10px;cursor:pointer;border:1px solid #aaa;
+                           border-radius:4px;font-size:12px;white-space:nowrap;
+                           background:#fff">
+                Salin Link
+            </button>
+        </div>
+        <script>
+        (function() {{
+            var inp = document.getElementById('surl-{safe_id}');
+            try {{
+                var base = window.parent.location.origin + window.parent.location.pathname;
+                var dbUrl = {db_url_js};
+                var params = '?case={case_id}';
+                if (dbUrl) {{
+                    var m = dbUrl.match(/[/]spreadsheets[/]d[/]([A-Za-z0-9_-]+)/);
+                    params += '&db=' + encodeURIComponent(m ? m[1] : dbUrl);
+                }}
+                inp.value = base + params;
+            }} catch(e) {{
+                inp.value = '?case={case_id}';
+            }}
+        }})();
+        function copySurl_{safe_id}() {{
+            var inp = document.getElementById('surl-{safe_id}');
+            var btn = document.getElementById('sbtn-{safe_id}');
+            if (navigator.clipboard) {{
+                navigator.clipboard.writeText(inp.value).then(function() {{
+                    btn.textContent = 'Tersalin!';
+                    setTimeout(function() {{ btn.textContent = 'Salin Link'; }}, 2000);
+                }});
+            }} else {{
+                inp.select();
+                document.execCommand('copy');
+                btn.textContent = 'Tersalin!';
+                setTimeout(function() {{ btn.textContent = 'Salin Link'; }}, 2000);
+            }}
+        }}
+        </script>
+        """,
+        unsafe_allow_javascript=True,
+    )
+
+
 st.title("Transmission Fault Locator")
 
 try:
@@ -795,6 +859,14 @@ if not st.session_state.get("runtime_gdrive_service_account"):
         except Exception:
             pass
 
+# Ekstrak ?db= dari URL share link — bootstrap spreadsheet tanpa upload credentials
+# ?db= bisa berupa spreadsheet ID saja atau URL lengkap
+_qp_db_from_link = st.query_params.get("db", "").strip()
+if _qp_db_from_link and not st.session_state.get("database_spreadsheet_url"):
+    if "https://" not in _qp_db_from_link and "/" not in _qp_db_from_link:
+        _qp_db_from_link = f"https://docs.google.com/spreadsheets/d/{_qp_db_from_link}/edit"
+    st.session_state["database_spreadsheet_url"] = _qp_db_from_link
+
 _creds_db_url = (
     str(st.session_state.get("database_spreadsheet_url", "") or "").strip()
     or str(get_config_secret("DATABASE_SPREADSHEET_URL", "") or "").strip()
@@ -802,6 +874,21 @@ _creds_db_url = (
 _creds_complete = bool(
     st.session_state.get("runtime_credentials_loaded_name") or _creds_db_url
 )
+
+# Auto-load case dari ?case= query param (shareable link)
+_qp_case_id = st.query_params.get("case", "").strip()
+if _qp_case_id and st.session_state.get("_restored_case_hash") != f"cloud:{_qp_case_id}":
+    _qp_sheet = st.session_state.get("saved_cases_sheet_name") or SAVED_CASES_SHEET
+    if _creds_db_url:
+        _qp_ok, _qp_msg = load_case_from_cloud(_creds_db_url, _qp_case_id, _qp_sheet, defer_restore=True)
+        if _qp_ok:
+            st.session_state["case_restore_message"] = _qp_msg
+            st.rerun()
+        else:
+            st.session_state["_qp_load_error"] = _qp_msg
+    else:
+        st.session_state["_qp_pending_case_id"] = _qp_case_id
+
 _creds_file_present = st.session_state.get("sidebar_credentials_upload") is not None
 _creds_applied = bool(st.session_state.get("runtime_credentials_loaded_name"))
 with st.sidebar.expander("Credentials", expanded=_creds_file_present and not _creds_applied):
@@ -1392,6 +1479,10 @@ if _sb_save_url and "line_param" in st.session_state:
         else:
             st.sidebar.error(_sb_sc_msg)
     install_sidebar_save_case_button_style()
+    _sb_last_cid = st.session_state.get("_last_cloud_save_case_id", "")
+    if _sb_last_cid:
+        with st.sidebar.expander("Bagikan Case", expanded=False):
+            _render_share_link_widget(_sb_last_cid, db_url=_sb_save_url)
 
 st.sidebar.markdown('<hr class="porlung-sidebar-divider-tight">', unsafe_allow_html=True)
 _case_loaded = bool(st.session_state.get("_restored_case_hash"))
@@ -1417,6 +1508,8 @@ remote_dat_file = remote_dat_file or get_restored_upload("remote_dat")
 
 if st.session_state.get("case_restore_message"):
     st.sidebar.success(st.session_state.pop("case_restore_message"))
+if st.session_state.get("_qp_load_error"):
+    st.sidebar.error(st.session_state.pop("_qp_load_error"))
 
 if not validate_uploaded_extension(cfg_file, ".cfg", "File local CFG"):
     st.stop()
@@ -1494,6 +1587,19 @@ if cfg_file is None or dat_file is None:
                         st.rerun()
                     else:
                         st.error(_lp_msg)
+                # Share link untuk case yang dipilih
+                if _lp_cloud_sel and _lp_cloud_opts:
+                    _lp_share_cid = str(_lp_cloud_opts[_lp_cloud_sel].get("case_id", ""))
+                    if _lp_share_cid:
+                        _render_share_link_widget(_lp_share_cid, db_url=_lp_cloud_url)
+
+        # Pesan panduan jika case_id dari link belum bisa dimuat (DB URL belum tersedia)
+        _qp_pending = st.session_state.pop("_qp_pending_case_id", "")
+        if _qp_pending:
+            st.info(
+                f"Link berisi case `{_qp_pending}`. Isi Database Spreadsheet URL di tab Setup DB "
+                "atau upload credentials agar case dapat dimuat otomatis."
+            )
     st.stop()
 
 local_cfg_bytes = cfg_file.getvalue()
@@ -2970,6 +3076,9 @@ with tab0:
         with _ccol2:
             if st.button("\u21bb Muat Ulang Daftar", key="reload_saved_cases_btn", width="stretch"):
                 st.session_state.pop("_saved_cases_cache", None)
+        _sc_last_cid = st.session_state.get("_last_cloud_save_case_id", "")
+        if _sc_last_cid:
+            _render_share_link_widget(_sc_last_cid, label="Link Case Terakhir Disimpan", db_url=_cloud_url)
 
         _sc_key = f"{_cloud_url}|{_cloud_sheet}"
         if st.session_state.get("_saved_cases_cache_key") != _sc_key or "_saved_cases_cache" not in st.session_state:
@@ -3004,6 +3113,11 @@ with tab0:
                     st.rerun()
                 else:
                     st.error(_lc_msg)
+            # Share link untuk case yang dipilih dari daftar
+            if _sel_label and _opts:
+                _lc_share_cid = str(_opts[_sel_label].get("case_id", ""))
+                if _lc_share_cid:
+                    _render_share_link_widget(_lc_share_cid, db_url=_cloud_url)
 
 
 with tab_ml:

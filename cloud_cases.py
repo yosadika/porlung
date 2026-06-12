@@ -15,6 +15,10 @@ Alur:
 """
 
 import base64
+import csv
+import io
+import urllib.parse
+import urllib.request
 from datetime import datetime
 
 import streamlit as st
@@ -169,6 +173,34 @@ def _read_payload_chunks(ss, sid, case_id: str, sheet_name: str = SAVED_CASES_DA
     return ""
 
 
+def _gviz_csv_url(sid: str, sheet_name: str) -> str:
+    return (
+        f"https://docs.google.com/spreadsheets/d/{sid}/gviz/tq"
+        f"?tqx=out:csv&sheet={urllib.parse.quote(sheet_name)}"
+    )
+
+
+def _read_sheet_csv_public(sid: str, sheet_name: str) -> list:
+    """Baca sheet via gviz CSV API tanpa auth (spreadsheet harus 'Anyone with link can view')."""
+    with urllib.request.urlopen(_gviz_csv_url(sid, sheet_name), timeout=30) as resp:
+        content = resp.read().decode("utf-8")
+    rows = list(csv.reader(io.StringIO(content)))
+    if not rows:
+        return []
+    headers = [h.strip() for h in rows[0]]
+    return [dict(zip(headers, row)) for row in rows[1:] if any(c.strip() for c in row)]
+
+
+def _read_payload_chunks_public(sid: str, case_id: str, sheet_name: str = SAVED_CASES_DATA_SHEET) -> str:
+    """Baca payload chunk via gviz CSV API tanpa auth."""
+    with urllib.request.urlopen(_gviz_csv_url(sid, sheet_name), timeout=60) as resp:
+        content = resp.read().decode("utf-8")
+    for row in csv.reader(io.StringIO(content)):
+        if row and str(row[0]).strip() == case_id:
+            return "".join(str(c) for c in row[1:] if c)
+    return ""
+
+
 def save_case_to_cloud(spreadsheet_url: str, case_name: str = "", sheet_name: str = SAVED_CASES_SHEET):
     """Build ZIP → base64 chunked ke `saved_cases_data` → upsert indeks. Return (ok, message)."""
     if "line_param" not in st.session_state:
@@ -218,12 +250,25 @@ def save_case_to_cloud(spreadsheet_url: str, case_name: str = "", sheet_name: st
     if not ok:
         return False, msg
     verb = "diperbarui" if action == "update" else "disimpan"
+    st.session_state["_last_cloud_save_case_id"] = cid
     return True, f"Case '{row['case_name']}' {verb} ke spreadsheet ({n_chunks} chunk, {len(archive_bytes):,} byte)."
 
 
 def list_saved_cases(spreadsheet_url: str, sheet_name: str = SAVED_CASES_SHEET) -> list:
-    """Daftar case tersimpan, urut `saved_at` terbaru dulu."""
-    recs = read_sheet_records(spreadsheet_url, sheet_name)
+    """Daftar case tersimpan, urut `saved_at` terbaru dulu.
+    Coba auth (service account) dulu; fallback ke public CSV API jika tidak tersedia.
+    """
+    sid = _extract_spreadsheet_id(spreadsheet_url)
+    recs = []
+    try:
+        recs = read_sheet_records(spreadsheet_url, sheet_name)
+    except Exception:
+        pass
+    if not recs and sid:
+        try:
+            recs = _read_sheet_csv_public(sid, sheet_name)
+        except Exception:
+            pass
     recs = [r for r in recs if str(r.get("case_id", "")).strip()]
     recs.sort(key=lambda r: str(r.get("saved_at", "")), reverse=True)
     return recs
@@ -250,20 +295,42 @@ def load_case_from_cloud(
     *,
     defer_restore: bool = False,
 ):
-    """Baca chunk by case_id → rakit → restore. Return (ok, message)."""
+    """Baca chunk by case_id → rakit → restore. Return (ok, message).
+    Coba auth (service account) dulu; fallback ke public CSV API jika tidak tersedia.
+    Spreadsheet harus 'Anyone with link can view' untuk fallback public.
+    """
     sid = _extract_spreadsheet_id(spreadsheet_url)
     if not sid or not case_id:
         return False, "URL spreadsheet atau case_id tidak valid."
+
+    # Baca indeks (saved_cases) — coba auth dulu, fallback public
     index_record = {}
-    for rec in read_sheet_records(spreadsheet_url, sheet_name):
+    try:
+        index_recs = read_sheet_records(spreadsheet_url, sheet_name)
+    except Exception:
+        index_recs = []
+    if not index_recs:
+        try:
+            index_recs = _read_sheet_csv_public(sid, sheet_name)
+        except Exception:
+            index_recs = []
+    for rec in index_recs:
         if str(rec.get("case_id", "")).strip() == str(case_id).strip():
             index_record = rec
             break
+
+    # Baca payload (saved_cases_data) — coba auth dulu, fallback public
+    b64 = ""
     try:
         ss = _build_sheets_service().spreadsheets()
         b64 = _read_payload_chunks(ss, sid, str(case_id).strip())
-    except Exception as exc:
-        return False, f"Gagal membaca payload case dari spreadsheet: {exc}"
+    except Exception:
+        pass
+    if not b64:
+        try:
+            b64 = _read_payload_chunks_public(sid, str(case_id).strip())
+        except Exception as exc:
+            return False, f"Gagal membaca payload case dari spreadsheet: {exc}"
     if not b64:
         return False, "Payload case tidak ditemukan di sheet `saved_cases_data`."
     try:
