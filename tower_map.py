@@ -89,12 +89,10 @@ def fault_label_anchor_from_segment(fault_segment):
     # tidak menumpuk dengan label nomor tower yang mengikuti jalur.
     if abs(dx) >= abs(dy):
         if dy >= 0:
-            return (-18, 76), "below"
+            return (-18, 90), "below"
         return (-18, -16), "above"
     if dx >= 0:
-        # Label berada di kiri fault point, jadi pointer harus keluar dari sisi
-        # kanan label agar mengarah kembali ke pinpoint.
-        return (226, 20), "right"
+        return (206, 20), "right"
     return (-18, 20), "left"
 
 
@@ -769,41 +767,57 @@ def render_tower_map(
                 tooltip=folium.Tooltip(f"Exact Fault Point - {selected_fault_option['label']}", sticky=True),
                 popup=folium.Popup(fault_popup, max_width=560),
             ).add_to(fault_group)
-            fault_label_anchor, fault_label_direction = fault_label_anchor_from_segment(fault_segment)
-            pointer_style = {
-                "left": "left:-10px;top:18px;border-top:7px solid transparent;border-bottom:7px solid transparent;border-right:10px solid #dc2626;",
-                "right": "right:-10px;top:18px;border-top:7px solid transparent;border-bottom:7px solid transparent;border-left:10px solid #dc2626;",
-                "above": "left:18px;bottom:-10px;border-left:7px solid transparent;border-right:7px solid transparent;border-top:10px solid #dc2626;",
-                "below": "left:18px;top:-10px;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:10px solid #dc2626;",
-            }.get(fault_label_direction, "")
+            fault_label_anchor, _ = fault_label_anchor_from_segment(fault_segment)
+            _lbl_ll_km = st.session_state.get("tower_schedule_selected_length_km")
+            if _lbl_ll_km is None:
+                _lbl_lp = st.session_state.get("effective_line_param") or st.session_state.get("line_param") or {}
+                _lbl_ll_km = _lbl_lp.get("length_km")
+            _lbl_gi_local = str(st.session_state.get("sidebar_filter_gi_local", "") or "GI Lokal").strip() or "GI Lokal"
+            _lbl_gi_remote = str(st.session_state.get("sidebar_filter_gi_remote", "") or "GI Remote").strip() or "GI Remote"
+            _lbl_d_local = selected_fault_option["distance_km"]
+            _lbl_d_remote = (float(_lbl_ll_km) - _lbl_d_local) if _lbl_ll_km is not None else None
+            _lbl_nearest_span = ""
+            if fault_segment:
+                _lbl_prev_cum = float(fault_segment["prev"].get("_cum_km", 0.0))
+                _lbl_next_cum = float(fault_segment["next"].get("_cum_km", 0.0))
+                _lbl_from_a = _lbl_d_local - _lbl_prev_cum
+                _lbl_to_b = _lbl_next_cum - _lbl_d_local
+                if abs(_lbl_from_a) <= abs(_lbl_to_b):
+                    _lbl_nearest_span = str(fault_segment["prev"].get("SPAN", ""))
+                else:
+                    _lbl_nearest_span = str(fault_segment["next"].get("SPAN", ""))
             fault_label_html = (
                 "<div style='"
-                "position:relative;"
+                "display:inline-block;"
                 "background:rgba(255,255,255,0.92);"
                 "border:1px solid #dc2626;"
                 "border-radius:6px;"
                 "box-shadow:0 1px 4px rgba(15,23,42,0.25);"
-                "padding:5px 7px;"
-                "font-size:12px;"
-                "line-height:1.25;"
+                "padding:5px 8px;"
+                "font-size:11px;"
+                "line-height:1.4;"
                 "color:#111827;"
                 "white-space:nowrap;"
                 "'>"
-                "<div style='font-weight:700;color:#b91c1c;'>Fault Location</div>"
-                f"<div>{selected_fault_option['label']}</div>"
-                f"<div>{map_display_value(selected_fault_option['distance_km'], decimals=3, suffix=' km')}</div>"
+                "<div style='font-weight:700;color:#b91c1c;font-size:12px;'>Fault Location</div>"
+                f"<div style='color:#6b7280;font-size:10px;margin-bottom:2px;'>{ {'de':'Double-Ended Calculation'}.get(selected_fault_option['key'], selected_fault_option['label']) }</div>"
+                f"<div>{map_display_value(_lbl_d_local, decimals=3, suffix=' km')} dari GI <b>{_lbl_gi_local}</b></div>"
                 + (
-                    f"<div style='color:#475569;'>{map_display_value(fault_segment['ratio'] * 100.0, decimals=1, suffix=' %')} span</div>"
-                    if fault_segment
+                    f"<div>{map_display_value(_lbl_d_remote, decimals=3, suffix=' km')} dari GI <b>{_lbl_gi_remote}</b></div>"
+                    if _lbl_d_remote is not None
                     else ""
                 )
-                + f"<div style='position:absolute;width:0;height:0;{pointer_style}'></div>"
+                + (
+                    f"<div style='color:#6b7280;font-size:10px;margin-top:1px;'>Tower terdekat: {_lbl_nearest_span}</div>"
+                    if _lbl_nearest_span
+                    else ""
+                )
                 + "</div>"
             )
             folium.Marker(
                 location=[fault_lat, fault_lon],
                 icon=folium.DivIcon(
-                    icon_size=(210, 70),
+                    icon_size=(200, 90),
                     icon_anchor=fault_label_anchor,
                     html=fault_label_html,
                 ),

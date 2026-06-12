@@ -598,11 +598,10 @@ install_restored_widget_default_guard()
 
 def install_sidebar_accordion_rules():
     """Accordion sidebar + warnai tombol 'Simpan Case ke Cloud' menjadi hijau.
-    Pakai st.components.v1.html — iframe-nya include allow-same-origin sehingga
+    Pakai st.iframe — pengganti st.components.v1.html; include allow-same-origin sehingga
     window.parent.document dapat diakses di Streamlit Cloud (berbeda dari st.html).
     """
-    import streamlit.components.v1 as _cv1
-    _cv1.html(
+    st.iframe(
         """
         <script>
         (function () {
@@ -669,7 +668,7 @@ def install_sidebar_accordion_rules():
         })();
         </script>
         """,
-        height=0,
+        height=1,
     )
 
 
@@ -677,8 +676,7 @@ install_sidebar_accordion_rules()
 
 def install_sidebar_save_case_button_style():
     """Re-trigger retry untuk pewarnaan tombol setelah tombol dirender."""
-    import streamlit.components.v1 as _cv1
-    _cv1.html(
+    st.iframe(
         """
         <script>
         (function () {
@@ -699,7 +697,7 @@ def install_sidebar_save_case_button_style():
         })();
         </script>
         """,
-        height=0,
+        height=1,
     )
 
 
