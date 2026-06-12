@@ -1509,7 +1509,13 @@ remote_dat_file = remote_dat_file or get_restored_upload("remote_dat")
 if st.session_state.get("case_restore_message"):
     st.sidebar.success(st.session_state.pop("case_restore_message"))
 if st.session_state.get("_qp_load_error"):
-    st.sidebar.error(st.session_state.pop("_qp_load_error"))
+    _qp_err_msg = st.session_state.pop("_qp_load_error")
+    st.sidebar.error(_qp_err_msg)
+    if "publik" in _qp_err_msg or "403" in _qp_err_msg or "404" in _qp_err_msg:
+        st.sidebar.info(
+            "Buka Google Sheets → Share → ubah akses ke "
+            "**Anyone with the link** (Viewer) agar case dapat dibaca tanpa login."
+        )
 
 if not validate_uploaded_extension(cfg_file, ".cfg", "File local CFG"):
     st.stop()

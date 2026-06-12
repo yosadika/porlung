@@ -180,9 +180,28 @@ def _gviz_csv_url(sid: str, sheet_name: str) -> str:
     )
 
 
+_PUBLIC_ACCESS_HINT = (
+    "Spreadsheet harus diset 'Anyone with the link can view' di Google Sheets "
+    "(klik Share > ubah akses > Anyone with the link > Viewer)."
+)
+
+
+def _open_gviz_url(url: str, timeout: int):
+    """Buka gviz URL dengan pesan error yang jelas saat 403/404."""
+    import urllib.error as _ue
+    try:
+        return urllib.request.urlopen(url, timeout=timeout)
+    except _ue.HTTPError as exc:
+        if exc.code in (403, 404):
+            raise PermissionError(
+                f"Spreadsheet tidak dapat dibaca publik (HTTP {exc.code}). {_PUBLIC_ACCESS_HINT}"
+            ) from exc
+        raise
+
+
 def _read_sheet_csv_public(sid: str, sheet_name: str) -> list:
     """Baca sheet via gviz CSV API tanpa auth (spreadsheet harus 'Anyone with link can view')."""
-    with urllib.request.urlopen(_gviz_csv_url(sid, sheet_name), timeout=30) as resp:
+    with _open_gviz_url(_gviz_csv_url(sid, sheet_name), timeout=30) as resp:
         content = resp.read().decode("utf-8")
     rows = list(csv.reader(io.StringIO(content)))
     if not rows:
@@ -193,7 +212,7 @@ def _read_sheet_csv_public(sid: str, sheet_name: str) -> list:
 
 def _read_payload_chunks_public(sid: str, case_id: str, sheet_name: str = SAVED_CASES_DATA_SHEET) -> str:
     """Baca payload chunk via gviz CSV API tanpa auth."""
-    with urllib.request.urlopen(_gviz_csv_url(sid, sheet_name), timeout=60) as resp:
+    with _open_gviz_url(_gviz_csv_url(sid, sheet_name), timeout=60) as resp:
         content = resp.read().decode("utf-8")
     for row in csv.reader(io.StringIO(content)):
         if row and str(row[0]).strip() == case_id:
