@@ -192,9 +192,15 @@ def _open_gviz_url(url: str, timeout: int):
     try:
         return urllib.request.urlopen(url, timeout=timeout)
     except _ue.HTTPError as exc:
-        if exc.code in (403, 404):
+        if exc.code == 403:
             raise PermissionError(
-                f"Spreadsheet tidak dapat dibaca publik (HTTP {exc.code}). {_PUBLIC_ACCESS_HINT}"
+                f"Spreadsheet tidak bisa dibaca publik (HTTP 403). {_PUBLIC_ACCESS_HINT}"
+            ) from exc
+        if exc.code == 404:
+            raise FileNotFoundError(
+                f"Spreadsheet atau sheet tidak ditemukan (HTTP 404). "
+                "Pastikan spreadsheet ID benar dan sheet 'saved_cases_data' sudah terbuat "
+                "(terbuat otomatis saat pertama kali Simpan Case ke Cloud)."
             ) from exc
         raise
 

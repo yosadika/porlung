@@ -597,201 +597,144 @@ install_restored_widget_default_guard()
 
 
 def install_sidebar_accordion_rules():
-    """Jaga sidebar seperti accordion: saat satu expander dibuka, expander lain ditutup."""
-    st.html(
+    """Accordion sidebar + warnai tombol 'Simpan Case ke Cloud' menjadi hijau.
+    Pakai st.components.v1.html — iframe-nya include allow-same-origin sehingga
+    window.parent.document dapat diakses di Streamlit Cloud (berbeda dari st.html).
+    """
+    import streamlit.components.v1 as _cv1
+    _cv1.html(
         """
         <script>
         (function () {
-            var SAVE_BUTTON_CLASS = "porlung-sidebar-save-case";
+            var SAVE_BTN_STYLE_ID = "porlungSidebarSaveCaseStyle";
 
-            function installSaveButtonStyle() {
-                if (window.parent.document.getElementById("porlungSidebarSaveCaseStyle")) return;
-                var style = window.parent.document.createElement("style");
-                style.id = "porlungSidebarSaveCaseStyle";
-                style.textContent = ""
-                    + "[data-testid='stSidebar'] button." + SAVE_BUTTON_CLASS + " {"
-                    + "background:#2f8f46 !important;"
-                    + "border-color:#26763a !important;"
-                    + "color:#ffffff !important;"
-                    + "font-weight:700 !important;"
-                    + "box-shadow:0 1px 0 rgba(20,96,45,.24) !important;"
-                    + "}"
-                    + "[data-testid='stSidebar'] button." + SAVE_BUTTON_CLASS + ":hover {"
-                    + "background:#26763a !important;"
-                    + "border-color:#1f6130 !important;"
-                    + "color:#ffffff !important;"
-                    + "}";
-                window.parent.document.head.appendChild(style);
+            function installSaveBtnStyle(doc) {
+                if (doc.getElementById(SAVE_BTN_STYLE_ID)) return;
+                var s = doc.createElement("style");
+                s.id = SAVE_BTN_STYLE_ID;
+                s.textContent =
+                    "[data-testid='stSidebar'] button.porlung-save-btn {"
+                    + "background:#2f8f46!important;border-color:#26763a!important;"
+                    + "color:#fff!important;font-weight:700!important;"
+                    + "box-shadow:0 1px 0 rgba(20,96,45,.24)!important;}"
+                    + "[data-testid='stSidebar'] button.porlung-save-btn:hover {"
+                    + "background:#26763a!important;border-color:#1f6130!important;color:#fff!important;}";
+                doc.head.appendChild(s);
             }
 
-            function styleSaveButton(sb) {
-                installSaveButtonStyle();
+            function styleSaveBtn(sb, doc) {
+                installSaveBtnStyle(doc);
                 var matched = 0;
-                sb.querySelectorAll('button').forEach(function (btn) {
-                    var text = (btn.innerText || btn.textContent || "").trim();
-                    if (text === "Simpan Case ke Cloud") {
-                        btn.classList.add(SAVE_BUTTON_CLASS);
-                        matched += 1;
+                sb.querySelectorAll("button").forEach(function (btn) {
+                    if ((btn.innerText || btn.textContent || "").trim() === "Simpan Case ke Cloud") {
+                        btn.classList.add("porlung-save-btn");
+                        matched++;
                     }
                 });
                 return matched;
             }
 
-            function retryStyleSaveButton(sb, attempt) {
-                var matched = styleSaveButton(sb);
-                if (matched > 0 || attempt >= 20) return;
-                setTimeout(function () {
-                    retryStyleSaveButton(sb, attempt + 1);
-                }, 200);
+            function retrySaveBtn(sb, doc, attempt) {
+                if (styleSaveBtn(sb, doc) > 0 || attempt >= 20) return;
+                setTimeout(function () { retrySaveBtn(sb, doc, attempt + 1); }, 200);
             }
 
-            function installClickAccordion(sb) {
-                sb.querySelectorAll('details').forEach(function (det) {
-                    det.removeAttribute("name");
-                });
-                if (sb._porlungAccordionClickBound) return;
-                sb._porlungAccordionClickBound = true;
-                sb.addEventListener("click", function (event) {
-                    var summary = event.target.closest && event.target.closest("summary");
+            function installAccordion(sb) {
+                sb.querySelectorAll("details").forEach(function (d) { d.removeAttribute("name"); });
+                if (sb._porlungAccordionBound) return;
+                sb._porlungAccordionBound = true;
+                sb.addEventListener("click", function (e) {
+                    var summary = e.target.closest && e.target.closest("summary");
                     if (!summary || !sb.contains(summary)) return;
                     var current = summary.closest("details");
                     if (!current || current.open) return;
                     sb.querySelectorAll("details[open]").forEach(function (other) {
                         if (other !== current) {
-                            var otherSummary = other.querySelector("summary");
-                            if (otherSummary) {
-                                otherSummary.click();
-                            }
+                            var os = other.querySelector("summary");
+                            if (os) os.click();
                         }
                     });
                 }, true);
             }
 
             function setup() {
-                var sb = window.parent.document.querySelector('[data-testid="stSidebar"]');
+                var doc = window.parent.document;
+                var sb = doc.querySelector('[data-testid="stSidebar"]');
                 if (!sb) { setTimeout(setup, 300); return; }
-                installClickAccordion(sb);
-                retryStyleSaveButton(sb, 0);
-                setTimeout(function () { installClickAccordion(sb); }, 250);
+                installAccordion(sb);
+                retrySaveBtn(sb, doc, 0);
+                setTimeout(function () { installAccordion(sb); }, 400);
             }
             setup();
         })();
         </script>
         """,
-        width="content",
-        unsafe_allow_javascript=True,
+        height=0,
     )
 
 
 install_sidebar_accordion_rules()
 
 def install_sidebar_save_case_button_style():
-    """Warnai tombol Simpan Case ke Cloud di sidebar setelah tombolnya dirender."""
-    html = """
-    <script>
-    (function () {
-        var SAVE_BUTTON_CLASS = "porlung-sidebar-save-case";
-        function ensureStyle() {
-            if (window.parent.document.getElementById("porlungSidebarSaveCaseStyle")) return;
-            var style = window.parent.document.createElement("style");
-            style.id = "porlungSidebarSaveCaseStyle";
-            style.textContent = ""
-                + "[data-testid='stSidebar'] button." + SAVE_BUTTON_CLASS + " {"
-                + "background:#2f8f46 !important;"
-                + "border-color:#26763a !important;"
-                + "color:#ffffff !important;"
-                + "font-weight:700 !important;"
-                + "box-shadow:0 1px 0 rgba(20,96,45,.24) !important;"
-                + "}"
-                + "[data-testid='stSidebar'] button." + SAVE_BUTTON_CLASS + ":hover {"
-                + "background:#26763a !important;"
-                + "border-color:#1f6130 !important;"
-                + "color:#ffffff !important;"
-                + "}";
-            window.parent.document.head.appendChild(style);
-        }
-        function applyStyle() {
-            ensureStyle();
-            var sb = window.parent.document.querySelector('[data-testid="stSidebar"]');
-            if (!sb) return;
-            sb.querySelectorAll('button').forEach(function (btn) {
-                var text = (btn.innerText || btn.textContent || "").trim();
-                if (text === "Simpan Case ke Cloud") {
-                    btn.classList.add(SAVE_BUTTON_CLASS);
-                }
-            });
-        }
-        applyStyle();
-        setTimeout(applyStyle, 100);
-        setTimeout(applyStyle, 350);
-    })();
-    </script>
-    """
-    st.html(html, width="content", unsafe_allow_javascript=True)
+    """Re-trigger retry untuk pewarnaan tombol setelah tombol dirender."""
+    import streamlit.components.v1 as _cv1
+    _cv1.html(
+        """
+        <script>
+        (function () {
+            function retry(attempt) {
+                var doc = window.parent.document;
+                var sb = doc.querySelector('[data-testid="stSidebar"]');
+                if (!sb) { if (attempt < 10) setTimeout(function(){retry(attempt+1);}, 200); return; }
+                var found = false;
+                sb.querySelectorAll("button").forEach(function (btn) {
+                    if ((btn.innerText || btn.textContent || "").trim() === "Simpan Case ke Cloud") {
+                        btn.classList.add("porlung-save-btn");
+                        found = true;
+                    }
+                });
+                if (!found && attempt < 20) setTimeout(function(){retry(attempt+1);}, 200);
+            }
+            retry(0);
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 
 def _render_share_link_widget(case_id: str, label: str = "Link untuk Dibagikan", db_url: str = ""):
-    """Tampilkan input URL shareable + tombol salin via JS.
+    """Tampilkan link shareable via st.code() — tombol salin bawaan Streamlit.
     Jika DATABASE_SPREADSHEET_URL sudah dikonfigurasi sebagai secret server-side,
-    link cukup ?case=<id> tanpa ?db= — lebih pendek dan lebih bersih.
-    Jika belum, embed spreadsheet ID di ?db= agar penerima tidak perlu upload credentials.
+    link cukup ?case=<id>. Jika belum, embed spreadsheet ID di ?db=.
     """
-    import json as _json
-    safe_id = re.sub(r"[^a-zA-Z0-9]", "", case_id)
-    # Jika URL sudah tersedia dari secret server-side, tidak perlu embed ?db= di link
+    import urllib.parse as _up
+
+    # Bangun base URL dari request headers (tersedia di Streamlit >= 1.37)
+    _base = ""
+    try:
+        _host = st.context.headers.get("host", "")
+        if _host:
+            _scheme = "http" if ("localhost" in _host or "127.0.0.1" in _host) else "https"
+            _base = f"{_scheme}://{_host}"
+    except Exception:
+        pass
+
+    # Tentukan apakah perlu embed ?db=
     _secret_db = str(get_config_secret("DATABASE_SPREADSHEET_URL", "") or "").strip()
     _need_db_param = bool(db_url and not _secret_db)
-    db_url_js = _json.dumps(db_url if _need_db_param else "")
-    st.caption(label)
-    st.html(
-        f"""
-        <div style="display:flex;align-items:center;gap:6px;margin:2px 0 6px 0">
-            <input id="surl-{safe_id}" type="text" readonly
-                   style="flex:1;padding:5px 8px;border:1px solid #d0d0d0;border-radius:4px;
-                          font-size:12px;font-family:monospace;background:#f5f5f5;color:#333"
-                   value="(memuat URL...)" />
-            <button id="sbtn-{safe_id}" onclick="copySurl_{safe_id}()"
-                    style="padding:5px 10px;cursor:pointer;border:1px solid #aaa;
-                           border-radius:4px;font-size:12px;white-space:nowrap;
-                           background:#fff">
-                Salin Link
-            </button>
-        </div>
-        <script>
-        (function() {{
-            var inp = document.getElementById('surl-{safe_id}');
-            try {{
-                var base = window.parent.location.origin + window.parent.location.pathname;
-                var dbUrl = {db_url_js};
-                var params = '?case={case_id}';
-                if (dbUrl) {{
-                    var m = dbUrl.match(/[/]spreadsheets[/]d[/]([A-Za-z0-9_-]+)/);
-                    params += '&db=' + encodeURIComponent(m ? m[1] : dbUrl);
-                }}
-                inp.value = base + params;
-            }} catch(e) {{
-                inp.value = '?case={case_id}';
-            }}
-        }})();
-        function copySurl_{safe_id}() {{
-            var inp = document.getElementById('surl-{safe_id}');
-            var btn = document.getElementById('sbtn-{safe_id}');
-            if (navigator.clipboard) {{
-                navigator.clipboard.writeText(inp.value).then(function() {{
-                    btn.textContent = 'Tersalin!';
-                    setTimeout(function() {{ btn.textContent = 'Salin Link'; }}, 2000);
-                }});
-            }} else {{
-                inp.select();
-                document.execCommand('copy');
-                btn.textContent = 'Tersalin!';
-                setTimeout(function() {{ btn.textContent = 'Salin Link'; }}, 2000);
-            }}
-        }}
-        </script>
-        """,
-        unsafe_allow_javascript=True,
-    )
+
+    params = f"?case={case_id}"
+    if _need_db_param:
+        _m = re.search(r"/spreadsheets/d/([A-Za-z0-9_-]+)", db_url)
+        _sid = _m.group(1) if _m else db_url
+        params += f"&db={_up.quote(_sid, safe='')}"
+
+    _url = f"{_base}{params}"
+    st.markdown("**Bagikan Link Case Siporlung**")
+    if label and label != "Link untuk Dibagikan":
+        st.caption(label)
+    st.code(_url, language=None)
 
 
 st.title("Transmission Fault Locator")
@@ -1479,9 +1422,14 @@ if _sb_save_url and "line_param" in st.session_state:
         else:
             st.sidebar.error(_sb_sc_msg)
     install_sidebar_save_case_button_style()
+    # Case ID: prioritas dari save terakhir, fallback dari cloud restore aktif
     _sb_last_cid = st.session_state.get("_last_cloud_save_case_id", "")
+    if not _sb_last_cid:
+        _restored_hash = st.session_state.get("_restored_case_hash", "")
+        if _restored_hash.startswith("cloud:"):
+            _sb_last_cid = _restored_hash[len("cloud:"):]
     if _sb_last_cid:
-        with st.sidebar.expander("Bagikan Case", expanded=False):
+        with st.sidebar.expander("Bagikan Link Case", expanded=True):
             _render_share_link_widget(_sb_last_cid, db_url=_sb_save_url)
 
 st.sidebar.markdown('<hr class="porlung-sidebar-divider-tight">', unsafe_allow_html=True)
@@ -1511,10 +1459,17 @@ if st.session_state.get("case_restore_message"):
 if st.session_state.get("_qp_load_error"):
     _qp_err_msg = st.session_state.pop("_qp_load_error")
     st.sidebar.error(_qp_err_msg)
-    if "publik" in _qp_err_msg or "403" in _qp_err_msg or "404" in _qp_err_msg:
+    if "403" in _qp_err_msg or "publik" in _qp_err_msg:
         st.sidebar.info(
             "Buka Google Sheets → Share → ubah akses ke "
             "**Anyone with the link** (Viewer) agar case dapat dibaca tanpa login."
+        )
+    elif "404" in _qp_err_msg or "tidak ditemukan" in _qp_err_msg:
+        st.sidebar.info(
+            "Kemungkinan penyebab: (1) Sheet `saved_cases_data` belum terbuat — "
+            "lakukan **Simpan Case ke Cloud** satu kali dari akun yang punya service account. "
+            "(2) Tambahkan `gdrive_service_account` ke Streamlit secrets agar auth langsung berhasil "
+            "tanpa bergantung pada akses publik."
         )
 
 if not validate_uploaded_extension(cfg_file, ".cfg", "File local CFG"):
