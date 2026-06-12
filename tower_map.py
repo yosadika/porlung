@@ -786,6 +786,9 @@ def render_tower_map(
                     _lbl_nearest_span = str(fault_segment["prev"].get("SPAN", ""))
                 else:
                     _lbl_nearest_span = str(fault_segment["next"].get("SPAN", ""))
+                import re as _re_span
+                _m_span = _re_span.search(r'#\d+', _lbl_nearest_span)
+                _lbl_nearest_span = _m_span.group(0) if _m_span else (_lbl_nearest_span[:20] + "..." if len(_lbl_nearest_span) > 20 else _lbl_nearest_span)
             fault_label_html = (
                 "<div style='"
                 "display:inline-block;"

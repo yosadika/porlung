@@ -1461,7 +1461,34 @@ elif _sb_li_active and st.session_state.get("line_parameter_source", "Input Manu
     st.session_state["line_parameter_source"] = "Database Excel Line Data"
 
 _case_loaded = bool(st.session_state.get("_restored_case_hash"))
+_sb_cs_url = st.session_state.get("database_spreadsheet_url", "")
+_sb_cs_sheet = st.session_state.get("saved_cases_sheet_name") or SAVED_CASES_SHEET
 with st.sidebar.expander("Case Storage", expanded=False):
+    if _sb_cs_url:
+        _sb_cs_cache_key = f"{_sb_cs_url}|{_sb_cs_sheet}"
+        if st.session_state.get("_saved_cases_cache_key") != _sb_cs_cache_key or "_saved_cases_cache" not in st.session_state:
+            st.session_state["_saved_cases_cache"] = list_saved_cases(_sb_cs_url, _sb_cs_sheet)
+            st.session_state["_saved_cases_cache_key"] = _sb_cs_cache_key
+        _sb_cs_cases = st.session_state.get("_saved_cases_cache") or []
+        if _sb_cs_cases:
+            _sb_cs_opts = {
+                f"{c.get('case_name') or '-'}  |  {c.get('line_name') or '-'}  |  {c.get('saved_at') or '-'}": c
+                for c in _sb_cs_cases
+            }
+            with st.form("sidebar_case_storage_cloud_form"):
+                _sb_cs_sel = st.selectbox("Muat dari Cloud", list(_sb_cs_opts.keys()), key="sidebar_cs_cloud_select")
+                _sb_cs_load = st.form_submit_button("Muat Case Terpilih", width="stretch")
+            if _sb_cs_load and _sb_cs_sel:
+                _sb_cs_cid = str(_sb_cs_opts[_sb_cs_sel].get("case_id", ""))
+                _sb_cs_ok, _sb_cs_msg = load_case_from_cloud(_sb_cs_url, _sb_cs_cid, _sb_cs_sheet, defer_restore=True)
+                if _sb_cs_ok:
+                    st.session_state["case_restore_message"] = _sb_cs_msg
+                    st.rerun()
+                else:
+                    st.error(_sb_cs_msg)
+        else:
+            st.caption("Belum ada case tersimpan di cloud.")
+        st.divider()
     case_archive_file = st.file_uploader("Load Case (.zip)", type=["zip"], key="case_archive_file")
 if case_archive_file is not None:
     import hashlib as _hashlib
@@ -1575,11 +1602,6 @@ if cfg_file is None or dat_file is None:
                         st.rerun()
                     else:
                         st.error(_lp_msg)
-                # Share link untuk case yang dipilih
-                if _lp_cloud_sel and _lp_cloud_opts:
-                    _lp_share_cid = str(_lp_cloud_opts[_lp_cloud_sel].get("case_id", ""))
-                    if _lp_share_cid:
-                        _render_share_link_widget(_lp_share_cid, db_url=_lp_cloud_url, show_title=False)
 
         # Pesan panduan jika case_id dari link belum bisa dimuat (DB URL belum tersedia)
         _qp_pending = st.session_state.pop("_qp_pending_case_id", "")
