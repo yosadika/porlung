@@ -9,6 +9,8 @@ import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
 
+from app_helpers import parse_id_numeric_series
+
 
 def map_display_value(value, decimals=None, suffix=""):
     if value is None or (isinstance(value, float) and math.isnan(value)):
@@ -143,12 +145,12 @@ def prepare_tower_map_dataframe(tower_df: pd.DataFrame):
     if tower_df is None or tower_df.empty or "LATITUDE" not in tower_df.columns or "LONGITUDE" not in tower_df.columns:
         return pd.DataFrame()
     map_df = tower_df.copy()
-    map_df["lat"] = pd.to_numeric(map_df["LATITUDE"].astype(str).str.replace(",", ".", regex=False), errors="coerce")
-    map_df["lon"] = pd.to_numeric(map_df["LONGITUDE"].astype(str).str.replace(",", ".", regex=False), errors="coerce")
+    map_df["lat"] = parse_id_numeric_series(map_df["LATITUDE"])
+    map_df["lon"] = parse_id_numeric_series(map_df["LONGITUDE"])
     if "JARAK km" not in map_df.columns and "JARAK" in map_df.columns:
-        map_df["JARAK km"] = pd.to_numeric(map_df["JARAK"].astype(str).str.replace(",", ".", regex=False), errors="coerce") / 1000.0
+        map_df["JARAK km"] = parse_id_numeric_series(map_df["JARAK"]) / 1000.0
     if "KUMULATIF km" not in map_df.columns and "KUMULATIF" in map_df.columns:
-        map_df["KUMULATIF km"] = pd.to_numeric(map_df["KUMULATIF"].astype(str).str.replace(",", ".", regex=False), errors="coerce") / 1000.0
+        map_df["KUMULATIF km"] = parse_id_numeric_series(map_df["KUMULATIF"]) / 1000.0
     map_df = map_df.dropna(subset=["lat", "lon"])
     if "KUMULATIF km" in map_df.columns:
         map_df["_cum_km"] = pd.to_numeric(map_df["KUMULATIF km"], errors="coerce")

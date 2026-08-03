@@ -73,6 +73,7 @@ from app_helpers import (
     make_streamlit_safe_columns,
     invert_current_phasors,
     plotly_image_filename,
+    parse_id_numeric_series,
 )
 from waveform_helpers import (
     build_waveform_rms_summary,
@@ -1026,10 +1027,7 @@ def _build_ml_dataset_rows_from_session():
     if isinstance(tower_df, pd.DataFrame) and not tower_df.empty and "SPAN" in tower_df.columns:
         tower_df = tower_df.copy()
         if "KUMULATIF km" not in tower_df.columns and "KUMULATIF" in tower_df.columns:
-            tower_df["KUMULATIF km"] = pd.to_numeric(
-                tower_df["KUMULATIF"].astype(str).str.replace(",", ".", regex=False),
-                errors="coerce",
-            ) / 1000.0
+            tower_df["KUMULATIF km"] = parse_id_numeric_series(tower_df["KUMULATIF"]) / 1000.0
         if "KUMULATIF km" in tower_df.columns:
             for _, tower_row in tower_df.iterrows():
                 span = str(tower_row.get("SPAN", "")).strip()
@@ -3292,10 +3290,7 @@ with tab_ml:
             ):
                 _tower_df_for_ml = _tower_df_for_ml.copy()
                 if "KUMULATIF km" not in _tower_df_for_ml.columns and "KUMULATIF" in _tower_df_for_ml.columns:
-                    _tower_df_for_ml["KUMULATIF km"] = pd.to_numeric(
-                        _tower_df_for_ml["KUMULATIF"].astype(str).str.replace(",", ".", regex=False),
-                        errors="coerce",
-                    ) / 1000.0
+                    _tower_df_for_ml["KUMULATIF km"] = parse_id_numeric_series(_tower_df_for_ml["KUMULATIF"]) / 1000.0
                 _tower_span_options = [
                     str(value).strip()
                     for value in _tower_df_for_ml["SPAN"].dropna().astype(str)
@@ -3703,10 +3698,7 @@ with tab_tower:
             metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
             metric_col1.metric("Rows", len(filtered_tower_df))
             if distance_col:
-                distance_values = pd.to_numeric(
-                    filtered_tower_df[distance_col].astype(str).str.replace(",", ".", regex=False),
-                    errors="coerce",
-                )
+                distance_values = parse_id_numeric_series(filtered_tower_df[distance_col])
                 total_distance_m = float(distance_values.sum(skipna=True))
                 metric_col2.metric("Total Jarak", f"{total_distance_m / 1000.0:.6f} km")
                 if np.isfinite(total_distance_m) and total_distance_m > 0:
@@ -3715,10 +3707,7 @@ with tab_tower:
             else:
                 metric_col2.metric("Total Jarak", "-")
             if cumulative_col:
-                cumulative_values = pd.to_numeric(
-                    filtered_tower_df[cumulative_col].astype(str).str.replace(",", ".", regex=False),
-                    errors="coerce",
-                )
+                cumulative_values = parse_id_numeric_series(filtered_tower_df[cumulative_col])
                 cumulative_max_m = float(cumulative_values.max(skipna=True))
                 metric_col3.metric("Kumulatif Max", f"{cumulative_max_m / 1000.0:.6f} km")
                 if np.isfinite(cumulative_max_m) and cumulative_max_m > 0:
@@ -3727,10 +3716,7 @@ with tab_tower:
             else:
                 metric_col3.metric("Kumulatif Max", "-")
             if string_count_col:
-                string_values = pd.to_numeric(
-                    filtered_tower_df[string_count_col].astype(str).str.replace(",", ".", regex=False),
-                    errors="coerce",
-                )
+                string_values = parse_id_numeric_series(filtered_tower_df[string_count_col])
                 metric_col4.metric("Jumlah String", f"{string_values.sum(skipna=True):.0f}")
             else:
                 metric_col4.metric("Jumlah String", "-")
@@ -3757,10 +3743,7 @@ with tab_tower:
             for meter_col in ["JARAK", "KUMULATIF"]:
                 if meter_col in display_tower_df.columns:
                     km_col = f"{meter_col} km"
-                    display_tower_df[km_col] = pd.to_numeric(
-                        display_tower_df[meter_col].astype(str).str.replace(",", ".", regex=False),
-                        errors="coerce",
-                    ) / 1000.0
+                    display_tower_df[km_col] = parse_id_numeric_series(display_tower_df[meter_col]) / 1000.0
             st.session_state["tower_schedule_filtered_df"] = display_tower_df.copy()
     
             st.markdown("### Tower Schedule Table")

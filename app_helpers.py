@@ -12,6 +12,21 @@ MAX_PLOT_POINTS = 6000
 OHM = chr(0x03A9)
 
 
+def parse_id_numeric_series(series: pd.Series) -> pd.Series:
+    """Konversi Series angka format Indonesia (titik=ribuan, koma=desimal) ke numerik.
+
+    Menangani campuran: "56.976,23" (ribuan+desimal), "787,04" (desimal koma saja),
+    dan "300.82" (desimal titik, mis. dari float asli/tanpa ribuan) tanpa saling merusak.
+    Naive replace(",", ".") saja akan merusak nilai berpemisah-ribuan (jadi dua titik ->
+    NaN) sehingga max/sum per kolom KUMULATIF/JARAK meleset untuk baris >= 1000.
+    """
+    text = series.astype(str).str.strip()
+    has_both_separators = text.str.contains(".", regex=False) & text.str.contains(",", regex=False)
+    text = text.where(~has_both_separators, text.str.replace(".", "", regex=False))
+    text = text.str.replace(",", ".", regex=False)
+    return pd.to_numeric(text, errors="coerce")
+
+
 def plotly_image_filename(line_name: str | None, prefix: str = "porlungplot") -> str:
     """Nama file unduhan plot saat tombol kamera ditekan.
 
