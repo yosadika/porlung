@@ -2777,10 +2777,10 @@ def render_rx_locus_literature_notes(meta: dict | None):
             """
 **Referensi lokal**
 
-- `IEEE-Guide-for-Protective-Relaying.pdf`, PDF page 68: distance relay characteristics can be shown on R-X diagrams; quadrilateral characteristic has four sides and is formed from directional/reactance characteristics plus resistive reach blinders.
-- `E04-034 - Distance Protection - US.pdf`, PDF page sekitar Figure 6: contoh koordinasi zona distance, termasuk Zone 1 sekitar 80-85% impedansi saluran terproteksi.
-- `energies-14-07074-v2.pdf`, PDF page 6: quadrilateral characteristic dibentuk dari directional element, reactance element, right resistance blinder, dan left resistance blinder; paper ini juga menekankan resistive/reactive reach yang dapat dikendalikan independen.
-- `7074_ApplyingDependable_KD_20221013_Web2.pdf`, PDF page 4: quadrilateral/polygonal distance element memiliki R dan X reach independen, dan keamanan Zone 1 dipengaruhi tilt reactance serta reach/blinder.
+- IEEE Std C37.113-2015, *IEEE Guide for Protective Relay Applications to Transmission Lines*, IEEE Power and Energy Society, hal. 68: distance relay characteristics can be shown on R-X diagrams; quadrilateral characteristic has four sides and is formed from directional/reactance characteristics plus resistive reach blinders.
+- V. Lackovic, *Distance Protection*, Course No. E04-034, Continuing Education and Development, Inc. (CEDengineering.com), sekitar Figure 6: contoh koordinasi zona distance, termasuk Zone 1 sekitar 80-85% impedansi saluran terproteksi.
+- G. M. Abo-Hamad, D. K. Ibrahim, E. AboulZahab, A. F. Zobaa, "Dynamic Quadrilateral Characteristic-Based Distance Relays for Transmission Lines Equipped with TCSC," *Energies*, vol. 14, no. 21, art. 7074, 2021, https://doi.org/10.3390/en14217074, hal. 6: quadrilateral characteristic dibentuk dari directional element, reactance element, right resistance blinder, dan left resistance blinder; paper ini juga menekankan resistive/reactive reach yang dapat dikendalikan independen.
+- K. Dase, A. Guzman, S. Chase, B. Smyth, "Applying Dependable and Secure Protection With Quadrilateral Distance Elements," Schweitzer Engineering Laboratories, Inc., 77th Annual Conference for Protective Relay Engineers, Texas A&M, 2022, hal. 4: quadrilateral/polygonal distance element memiliki R dan X reach independen, dan keamanan Zone 1 dipengaruhi tilt reactance serta reach/blinder.
 """
         )
         st.caption(
